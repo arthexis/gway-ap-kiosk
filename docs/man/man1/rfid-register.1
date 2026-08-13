@@ -1,0 +1,73 @@
+.TH RFID-REGISTER 1 "2026-07-28" "GWAY local tools" "User Commands"
+.SH NAME
+rfid-register \- register RFID transition directories and mode scripts
+.SH SYNOPSIS
+.B rfid-register
+.RI [ options ]
+.SH DESCRIPTION
+.B rfid-register
+creates and lists local RFID command mappings under
+.IR /home/arthe/.config/rfid-modes/cards .
+It reads the passive scan file produced by
+.BR rfid-scan-publisher (1).
+.SH OPTIONS
+.TP
+.BI --config-dir " DIR"
+Use a non-default RFID mode configuration directory.
+.TP
+.BI --scan-file " FILE"
+Read latest/waited scans from a non-default scan JSON file.
+.TP
+.BI --path " PATH"
+Slash-separated card path, for example
+.IR FIRST_CARD/SECOND_CARD .
+.TP
+.BI --card " CARD"
+Append this card ID to
+.B --path
+or register it at the root.
+.TP
+.B --latest
+Use the latest card currently present in the scan file.
+.TP
+.B --wait
+Wait for the next distinct scanned card.
+.TP
+.BI --script " FILE"
+Copy an existing shell or Python script into the transition path.
+.TP
+.BI --command " COMMAND"
+Create a shell script that execs
+.IR COMMAND .
+.TP
+.B --dir
+Create a directory transition.
+.TP
+.B --hold
+Register
+.B hold.sh
+or
+.B hold.py
+in the target directory.
+.TP
+.B --new
+Register
+.B new.sh
+or
+.B new.py
+in the target directory.
+.TP
+.B --list
+List registered transition paths.
+.SH EXAMPLES
+.nf
+/home/arthe/.local/bin/rfid-register --list
+/home/arthe/.local/bin/rfid-register --latest --dir
+/home/arthe/.local/bin/rfid-register --path FIRST_CARD --wait --label 'log scan' --command 'date >> /home/arthe/rfid-runs.log'
+/home/arthe/.local/bin/rfid-register --path FIRST_CARD/SECOND_CARD --script /home/arthe/bin/my-mode.sh
+/home/arthe/.local/bin/rfid-register --path FIRST_CARD --new --command 'mkdir -p "$RFID_MODE_CREATE_TARGET_DIR"'
+.fi
+.SH SEE ALSO
+.BR rfid-commands (1),
+.BR rfid-mode-runner (1),
+.BR rfid-scan-publisher (1)

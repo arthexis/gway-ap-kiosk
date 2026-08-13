@@ -1,0 +1,57 @@
+.TH GWAY-KIOSK-STATUS 1 "2026-08-08" "GWAY local tools" "User Commands"
+.SH NAME
+gway-kiosk-status \- serve the local GWAY AP, card, system, and TODO kiosk page
+.SH SYNOPSIS
+.B gway-kiosk-status
+[\fB--host\fR ADDRESS]
+[\fB--port\fR PORT]
+[\fB--json\fR]
+[\fB--self-test\fR]
+.SH DESCRIPTION
+.B gway-kiosk-status
+serves a loopback-only kiosk dashboard for this host. The page reads local AP
+credentials, RFID scanner state, LCD history, system warnings, service health,
+and the host-local TODO queue without requiring Arthexis source routes or
+templates.
+.PP
+The installed system service listens on
+.BR http://127.0.0.1:8899/ .
+.SH OPTIONS
+.TP
+.B --host ADDRESS
+Bind address. The default is 127.0.0.1.
+.TP
+.B --port PORT
+Bind port. The default is 8899.
+.TP
+.B --json
+Print one kiosk JSON payload and exit.
+.TP
+.B --self-test
+Build one page, validate key sections, and exit.
+.SH ENVIRONMENT
+.TP
+.B GWAY_KIOSK_TODO_FILE
+TODO file to display. Defaults to /home/arthe/TODO.txt.
+.TP
+.B GWAY_KIOSK_WORKGROUP_FILE
+Active work status file. Defaults to /home/arthe/workgroup.txt.
+.TP
+.B GWAY_KIOSK_WORK_ACTIVE_MAX_AGE_MINUTES
+Maximum workgroup entry age considered active. Defaults to 360.
+.TP
+.B GWAY_KIOSK_REFRESH_SECONDS
+Browser refresh polling interval. Defaults to 30.
+.SH FILES
+.TP
+.I /home/arthe/TODO.txt
+Host-local TODO queue.
+.TP
+.I /home/arthe/workgroup.txt
+Host-local active work marker.
+.TP
+.I /home/arthe/ap-password.txt
+Host-local AP credentials.
+.SH SEE ALSO
+.BR todo.sh (1),
+.BR systemctl (1)

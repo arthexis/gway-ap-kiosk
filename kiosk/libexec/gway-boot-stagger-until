@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+target_seconds="${1:-30}"
+
+case "$target_seconds" in
+    ''|*[!0-9]*)
+        echo "usage: gway-boot-stagger-until SECONDS" >&2
+        exit 2
+        ;;
+esac
+
+uptime_seconds="$(cut -d. -f1 /proc/uptime 2>/dev/null || printf '%s\n' "$target_seconds")"
+
+case "$uptime_seconds" in
+    ''|*[!0-9]*)
+        exit 0
+        ;;
+esac
+
+if [ "$uptime_seconds" -lt "$target_seconds" ]; then
+    sleep "$((target_seconds - uptime_seconds))"
+fi

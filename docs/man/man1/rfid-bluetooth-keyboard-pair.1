@@ -1,0 +1,18 @@
+.TH RFID-BLUETOOTH-KEYBOARD-PAIR 1 "2026-07-28" "GWAY local tools" "User Commands"
+.SH NAME
+rfid-bluetooth-keyboard-pair \- open a bounded Bluetooth keyboard pairing window
+.SH SYNOPSIS
+.B rfid-bluetooth-keyboard-pair
+.RI [ options ]
+.SH DESCRIPTION
+Runs a bounded Bluetooth pairing workflow for keyboards and mirrors short PIN or
+passkey prompts to the LCD event channel.
+.SH OPTIONS
+.TP
+.BI --duration " SECONDS"
+Pairing window length.
+.TP
+.BI --pin-seconds " SECONDS"
+LCD display duration for PIN/passkey prompts.
+.SH SEE ALSO
+.BR rfid-bind-bluetooth-keyboard-pair (1)

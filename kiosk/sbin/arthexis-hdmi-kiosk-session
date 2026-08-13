@@ -1,0 +1,515 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ENV_FILE="${KIOSK_ENV_FILE:-/etc/default/arthexis-hdmi-kiosk}"
+if [[ -r "${ENV_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+fi
+
+: "${KIOSK_URL:=http://127.0.0.1:8888/}"
+: "${KIOSK_BROWSER:=/usr/bin/chromium}"
+: "${KIOSK_APP_ID:=arthexis-hdmi-kiosk}"
+: "${KIOSK_TARGET_OUTPUT:=HDMI-A-2}"
+: "${KIOSK_REQUIRE_TARGET_OUTPUT:=0}"
+: "${KIOSK_WINDOW_SIZE:=1920,1080}"
+: "${KIOSK_SESSION_RUNTIME_DIR:=/run/user/1000}"
+: "${KIOSK_WAYLAND_DISPLAY:=wayland-0}"
+: "${KIOSK_DISPLAY:=:0}"
+: "${KIOSK_XAUTHORITY:=/home/arthe/.Xauthority}"
+: "${KIOSK_ALLOWED_HOSTS:=localhost,127.0.0.1,cdn.jsdelivr.net,cdnjs.cloudflare.com,raw.githubusercontent.com,img.shields.io}"
+: "${KIOSK_HOST_RESOLVER_RULES:=}"
+: "${KIOSK_SUSPEND:=0}"
+: "${KIOSK_PRIVATE_SESSION:=1}"
+: "${KIOSK_DISABLE_PASSWORD_MANAGER:=1}"
+: "${KIOSK_EXTRA_CHROMIUM_FLAGS:=}"
+: "${KIOSK_WINDOW_TOP_CROP_PIXELS:=0}"
+: "${KIOSK_WHATSAPP_PANEL:=0}"
+: "${KIOSK_PRIMARY_WIDTH_PERCENT:=75}"
+: "${KIOSK_WHATSAPP_URL:=https://web.whatsapp.com/}"
+: "${KIOSK_WHATSAPP_PROFILE_DIR:=/home/arthe/.config/whatsapp-kiosk-panel}"
+: "${KIOSK_WHATSAPP_CACHE_DIR:=/home/arthe/.cache/whatsapp-kiosk-panel}"
+: "${KIOSK_WHATSAPP_EXTRA_CHROMIUM_FLAGS:=}"
+: "${KIOSK_WHATSAPP_LEFT_CROP_PIXELS:=0}"
+: "${KIOSK_RFID_AUTO_DISPLAY:=0}"
+: "${KIOSK_RFID_AUTO_DISPLAY_TOKEN_FILE:=/var/lib/arthexis-hdmi-kiosk/rfid-auto-display.token}"
+: "${KIOSK_BASTION_CHECK:=/usr/local/libexec/bastion-key-present}"
+: "${KIOSK_MANUAL_STATE_FILE:=/run/user/1000/arthexis-hdmi-kiosk/manual-enabled}"
+: "${KIOSK_RESTART_ON_KEY_ABSENT:=1}"
+: "${KIOSK_HIDE_WF_PANEL:=0}"
+: "${KIOSK_WF_PANEL_RESPAWN_PATTERN:=/usr/bin/lwrespawn /usr/bin/wf-panel-pi}"
+: "${KIOSK_WF_PANEL_COMM:=wf-panel-pi}"
+: "${KIOSK_RESTACK_WINDOWS:=1}"
+: "${KIOSK_WMCTRL:=/usr/bin/wmctrl}"
+: "${KIOSK_XPROP:=/usr/bin/xprop}"
+
+truthy() {
+  [[ "${1:-}" =~ ^(1|yes|true|on)$ ]]
+}
+
+bastion_key_present() {
+  [[ -x "${KIOSK_BASTION_CHECK}" ]] && "${KIOSK_BASTION_CHECK}" --quiet >/dev/null 2>&1
+}
+
+clear_manual_state() {
+  if [[ -n "${KIOSK_MANUAL_STATE_FILE}" ]]; then
+    rm -f "${KIOSK_MANUAL_STATE_FILE}" || true
+  fi
+}
+
+detect_wayland_window_size() {
+  /usr/bin/wlr-randr 2>/dev/null | awk -v target="${KIOSK_TARGET_OUTPUT}" '
+    /^[^[:space:]]/ {
+      output = $1
+      enabled = 0
+      next
+    }
+    /^[[:space:]]+Enabled:[[:space:]]+yes/ {
+      enabled = 1
+      next
+    }
+    enabled && /^[[:space:]]+[0-9]+x[0-9]+[[:space:]]+px.*\(current\)/ {
+      if (output == target) {
+        found = 1
+        print $1
+        exit
+      }
+      if (first == "") {
+        first = $1
+      }
+    }
+    END {
+      if (!found && first != "") {
+        print first
+      }
+    }
+  '
+}
+
+resolve_window_size() {
+  local configured="${KIOSK_WINDOW_SIZE}"
+  local detected
+
+  case "${configured}" in
+    auto|current|detect|wayland)
+      detected="$(detect_wayland_window_size || true)"
+      if [[ "${detected}" =~ ^[0-9]+x[0-9]+$ ]]; then
+        echo "${detected/x/,}"
+        return 0
+      fi
+      echo "Could not detect Wayland output size; falling back to 1920,1080" >&2
+      echo "1920,1080"
+      ;;
+    [0-9]*x[0-9]*)
+      echo "${configured/x/,}"
+      ;;
+    *)
+      echo "${configured}"
+      ;;
+  esac
+}
+
+split_window_geometry() {
+  /usr/bin/python3 - "${resolved_window_size}" "${KIOSK_PRIMARY_WIDTH_PERCENT}" "${KIOSK_WINDOW_TOP_CROP_PIXELS}" "${KIOSK_WHATSAPP_LEFT_CROP_PIXELS}" <<'PY'
+import sys
+
+try:
+    width_s, height_s = sys.argv[1].split(",", 1)
+    width = int(width_s)
+    height = int(height_s)
+except (ValueError, IndexError):
+    width, height = 1920, 1080
+
+try:
+    percent = int(sys.argv[2])
+except (ValueError, IndexError):
+    percent = 75
+
+try:
+    top_crop = int(sys.argv[3])
+except (ValueError, IndexError):
+    top_crop = 0
+
+try:
+    left_crop = int(sys.argv[4])
+except (ValueError, IndexError):
+    left_crop = 0
+
+percent = min(90, max(50, percent))
+top_crop = min(160, max(0, top_crop))
+primary_width = max(1, width * percent // 100)
+secondary_width = max(1, width - primary_width)
+
+if width >= 960 and secondary_width < 320:
+    secondary_width = 320
+    primary_width = width - secondary_width
+
+left_crop = min(max(0, left_crop), max(0, primary_width - 1))
+full_height = height + top_crop
+status_position = f"0,{-top_crop}" if top_crop else "0,0"
+whatsapp_position = f"{primary_width - left_crop},{-top_crop}" if top_crop else f"{primary_width - left_crop},0"
+single_window_size = f"{width},{full_height}"
+
+print(
+    f"{primary_width},{full_height} "
+    f"{secondary_width + left_crop},{full_height} "
+    f"{whatsapp_position} "
+    f"{status_position} "
+    f"{single_window_size}"
+)
+PY
+}
+
+if truthy "${KIOSK_SUSPEND}"; then
+  echo "HDMI kiosk suspended by USB key state" >&2
+  exit 75
+fi
+
+normalize_kiosk_url() {
+  local token=""
+  if [[ -r "${KIOSK_RFID_AUTO_DISPLAY_TOKEN_FILE}" ]]; then
+    token="$(tr -d '\r\n' < "${KIOSK_RFID_AUTO_DISPLAY_TOKEN_FILE}")"
+  fi
+  /usr/bin/python3 - "${KIOSK_URL}" "${KIOSK_RFID_AUTO_DISPLAY}" "${token}" <<'PY'
+import sys
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+url = sys.argv[1]
+auto_display = sys.argv[2].strip().lower() in {"1", "true", "yes", "on"}
+token = sys.argv[3].strip()
+parts = urlsplit(url)
+query_pairs = [
+    (key, value)
+    for key, value in parse_qsl(parts.query, keep_blank_values=True)
+    if key not in {"kiosk", "rfid_auto_display", "kiosk_rfid_auto_display_token"}
+]
+query_pairs.append(("kiosk", "1"))
+if auto_display:
+    query_pairs.append(("rfid_auto_display", "1"))
+    if token:
+        query_pairs.append(("kiosk_rfid_auto_display_token", token))
+print(
+    urlunsplit(
+        (
+            parts.scheme,
+            parts.netloc,
+            parts.path or "/",
+            urlencode(query_pairs, doseq=True),
+            parts.fragment,
+        )
+    )
+)
+PY
+}
+
+KIOSK_URL="$(normalize_kiosk_url)"
+
+export HOME=/var/lib/arthexis-hdmi-kiosk
+export XDG_CONFIG_HOME="${HOME}/.config"
+export XDG_CACHE_HOME="${HOME}/.cache"
+export XDG_DATA_HOME="${HOME}/.local/share"
+export XDG_RUNTIME_DIR="${KIOSK_SESSION_RUNTIME_DIR}"
+export WAYLAND_DISPLAY="${KIOSK_WAYLAND_DISPLAY}"
+export DISPLAY="${KIOSK_DISPLAY}"
+export XAUTHORITY="${KIOSK_XAUTHORITY}"
+export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+
+mkdir -p \
+  "${XDG_CONFIG_HOME}" \
+  "${XDG_CACHE_HOME}" \
+  "${XDG_DATA_HOME}" \
+  "${HOME}/chromium-cache" \
+  "${HOME}/chromium-profile"
+chmod 0700 \
+  "${XDG_CONFIG_HOME}" \
+  "${XDG_CACHE_HOME}" \
+  "${XDG_DATA_HOME}" \
+  "${HOME}/chromium-cache" \
+  "${HOME}/chromium-profile"
+
+if truthy "${KIOSK_WHATSAPP_PANEL}"; then
+  mkdir -p "${KIOSK_WHATSAPP_PROFILE_DIR}" "${KIOSK_WHATSAPP_CACHE_DIR}"
+  chmod 0700 "${KIOSK_WHATSAPP_PROFILE_DIR}" "${KIOSK_WHATSAPP_CACHE_DIR}"
+fi
+
+if truthy "${KIOSK_REQUIRE_TARGET_OUTPUT}"; then
+  if ! /usr/bin/wlr-randr | awk -v out="${KIOSK_TARGET_OUTPUT}" '
+      index($0, out " ") == 1 { in_output = 1; next }
+      /^[^[:space:]]/ { in_output = 0 }
+      in_output && /Enabled:[[:space:]]+yes/ { found = 1 }
+      END { exit found ? 0 : 1 }
+    '; then
+    echo "Refusing to start HDMI kiosk: target output ${KIOSK_TARGET_OUTPUT} is not enabled" >&2
+    exit 75
+  fi
+fi
+
+xset -dpms s off s noblank >/dev/null 2>&1 || true
+
+read -r -a extra_flags <<< "${KIOSK_EXTRA_CHROMIUM_FLAGS}"
+read -r -a whatsapp_extra_flags <<< "${KIOSK_WHATSAPP_EXTRA_CHROMIUM_FLAGS}"
+resolved_window_size="$(resolve_window_size)"
+read -r status_window_size whatsapp_window_size whatsapp_window_position status_window_position single_window_size <<< "$(split_window_geometry)"
+
+privacy_flags=()
+if truthy "${KIOSK_PRIVATE_SESSION}"; then
+  privacy_flags+=(--incognito)
+fi
+
+if truthy "${KIOSK_DISABLE_PASSWORD_MANAGER}"; then
+  default_profile="${HOME}/chromium-profile/Default"
+  mkdir -p "${default_profile}"
+  /usr/bin/python3 - "${default_profile}/Preferences" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    prefs = json.loads(path.read_text()) if path.exists() else {}
+except json.JSONDecodeError:
+    prefs = {}
+
+prefs["credentials_enable_service"] = False
+prefs.setdefault("profile", {})["password_manager_enabled"] = False
+prefs.setdefault("autofill", {})["profile_enabled"] = False
+prefs.setdefault("autofill", {})["credit_card_enabled"] = False
+path.write_text(json.dumps(prefs, sort_keys=True, separators=(",", ":")))
+PY
+  rm -f \
+    "${default_profile}/Login Data" \
+    "${default_profile}/Login Data-journal" \
+    "${default_profile}/Web Data" \
+    "${default_profile}/Web Data-journal"
+  privacy_flags+=(--disable-save-password-bubble)
+fi
+
+host_resolver_flags=()
+if [[ -n "${KIOSK_HOST_RESOLVER_RULES}" ]]; then
+  host_resolver_flags=(--host-resolver-rules="${KIOSK_HOST_RESOLVER_RULES}")
+elif [[ -n "${KIOSK_ALLOWED_HOSTS}" ]]; then
+  host_resolver_rule="MAP * 0.0.0.0"
+  IFS=',' read -r -a allowed_hosts <<< "${KIOSK_ALLOWED_HOSTS}"
+  for host in "${allowed_hosts[@]}"; do
+    host="${host#"${host%%[![:space:]]*}"}"
+    host="${host%"${host##*[![:space:]]}"}"
+    if [[ -n "${host}" ]]; then
+      host_resolver_rule+=",EXCLUDE ${host}"
+    fi
+  done
+  host_resolver_flags=(--host-resolver-rules="${host_resolver_rule}")
+fi
+
+browser_pids=()
+wf_panel_respawner_pids=()
+wf_panel_hidden=0
+
+hide_wf_panel() {
+  local pid
+  if ! truthy "${KIOSK_HIDE_WF_PANEL}"; then
+    return 0
+  fi
+  mapfile -t wf_panel_respawner_pids < <(/usr/bin/pgrep -u "$(id -u)" -f -- "${KIOSK_WF_PANEL_RESPAWN_PATTERN}" || true)
+  for pid in "${wf_panel_respawner_pids[@]:-}"; do
+    kill -STOP "${pid}" >/dev/null 2>&1 || true
+  done
+  while read -r pid; do
+    [[ -n "${pid}" ]] || continue
+    kill "${pid}" >/dev/null 2>&1 || true
+  done < <(/usr/bin/pgrep -u "$(id -u)" -x -- "${KIOSK_WF_PANEL_COMM}" || true)
+  wf_panel_hidden=1
+}
+
+restore_wf_panel() {
+  local pid
+  if [[ "${wf_panel_hidden}" -ne 1 ]]; then
+    return 0
+  fi
+  for pid in "${wf_panel_respawner_pids[@]:-}"; do
+    kill -CONT "${pid}" >/dev/null 2>&1 || true
+  done
+  wf_panel_hidden=0
+}
+
+restack_hdmi_windows() {
+  local attempt window_list status_id whatsapp_id
+  if ! truthy "${KIOSK_RESTACK_WINDOWS}" || [[ ! -x "${KIOSK_WMCTRL}" ]]; then
+    return 0
+  fi
+
+  for attempt in {1..60}; do
+    window_list="$("${KIOSK_WMCTRL}" -lx -G 2>/dev/null || true)"
+    status_id="$(awk '$0 ~ /arthexis-hdmi-kiosk/ && $0 !~ /arthexis-hdmi-kiosk-whatsapp/ { print $1; exit }' <<< "${window_list}")"
+    whatsapp_id="$(awk '$0 ~ /arthexis-hdmi-kiosk-whatsapp/ { print $1; exit }' <<< "${window_list}")"
+
+    if [[ -n "${status_id}" && -n "${whatsapp_id}" ]]; then
+      "${KIOSK_WMCTRL}" -i -r "${whatsapp_id}" -b remove,above >/dev/null 2>&1 || true
+      "${KIOSK_WMCTRL}" -i -r "${whatsapp_id}" -b add,below,skip_taskbar >/dev/null 2>&1 || true
+      "${KIOSK_WMCTRL}" -i -r "${status_id}" -b remove,below >/dev/null 2>&1 || true
+      "${KIOSK_WMCTRL}" -i -r "${status_id}" -b add,above,skip_taskbar >/dev/null 2>&1 || true
+      "${KIOSK_WMCTRL}" -i -a "${status_id}" >/dev/null 2>&1 || true
+      return 0
+    fi
+
+    sleep 0.2
+  done
+}
+
+force_single_hdmi_window() {
+  local attempt window_list status_id visible_width visible_height
+  if ! truthy "${KIOSK_RESTACK_WINDOWS}" || [[ ! -x "${KIOSK_WMCTRL}" ]]; then
+    return 0
+  fi
+
+  IFS=',' read -r visible_width visible_height <<< "${resolved_window_size}"
+  visible_width="${visible_width:-1920}"
+  visible_height="${visible_height:-1080}"
+
+  for attempt in {1..60}; do
+    window_list="$("${KIOSK_WMCTRL}" -lx -G 2>/dev/null || true)"
+    status_id="$(awk '$0 ~ /arthexis-hdmi-kiosk/ && $0 !~ /arthexis-hdmi-kiosk-whatsapp/ { print $1; exit }' <<< "${window_list}")"
+
+    if [[ -n "${status_id}" ]]; then
+      if [[ -x "${KIOSK_XPROP}" ]]; then
+        "${KIOSK_XPROP}" \
+          -id "${status_id}" \
+          -f _MOTIF_WM_HINTS 32c \
+          -set _MOTIF_WM_HINTS "0x2, 0x0, 0x0, 0x0, 0x0" \
+          >/dev/null 2>&1 || true
+      fi
+      "${KIOSK_WMCTRL}" -i -r "${status_id}" -b add,skip_taskbar >/dev/null 2>&1 || true
+      "${KIOSK_WMCTRL}" -i -r "${status_id}" -e "0,0,0,${visible_width},${visible_height}" >/dev/null 2>&1 || true
+      "${KIOSK_WMCTRL}" -i -a "${status_id}" >/dev/null 2>&1 || true
+      return 0
+    fi
+
+    sleep 0.2
+  done
+}
+
+terminate_browsers() {
+  local pid
+  for pid in "${browser_pids[@]:-}"; do
+    if kill -0 "${pid}" >/dev/null 2>&1; then
+      kill "${pid}" >/dev/null 2>&1 || true
+    fi
+  done
+  wait "${browser_pids[@]:-}" >/dev/null 2>&1 || true
+  browser_pids=()
+}
+
+stop_browsers() {
+  terminate_browsers
+  restore_wf_panel
+  exit 0
+}
+
+trap stop_browsers TERM INT
+hide_wf_panel
+
+browser_common_flags=(
+  "${KIOSK_BROWSER}"
+  --class="${KIOSK_APP_ID}"
+  --name="${KIOSK_APP_ID}"
+  --window-position="${status_window_position}"
+  --user-data-dir="${HOME}/chromium-profile"
+  --disk-cache-dir="${HOME}/chromium-cache"
+  --no-first-run
+  --no-default-browser-check
+  --test-type
+  --disable-background-networking
+  --disable-component-update
+  --disable-crash-reporter
+  --disable-extensions
+  --disable-features=AutofillServerCommunication,MediaRouter,OptimizationHints,Translate
+  --disable-gpu
+  --disable-print-preview
+  --disable-session-crashed-bubble
+  --disable-sync
+  --disable-dev-shm-usage
+  --noerrdialogs
+  --no-proxy-server
+  "${host_resolver_flags[@]}"
+  "${privacy_flags[@]}"
+  --overscroll-history-navigation=0
+  "${extra_flags[@]}"
+)
+
+browser_command=(
+  "${browser_common_flags[@]}"
+  --kiosk "${KIOSK_URL}"
+  --window-size="${single_window_size}"
+)
+
+split_status_browser_command=(
+  "${browser_common_flags[@]}"
+  --app="${KIOSK_URL}"
+  --window-size="${status_window_size}"
+)
+
+whatsapp_browser_command=(
+  "${KIOSK_BROWSER}"
+  --class="${KIOSK_APP_ID}-whatsapp"
+  --name="${KIOSK_APP_ID}-whatsapp"
+  --app="${KIOSK_WHATSAPP_URL}"
+  --window-position="${whatsapp_window_position}"
+  --window-size="${whatsapp_window_size}"
+  --user-data-dir="${KIOSK_WHATSAPP_PROFILE_DIR}"
+  --disk-cache-dir="${KIOSK_WHATSAPP_CACHE_DIR}"
+  --no-first-run
+  --no-default-browser-check
+  --test-type
+  --disable-component-update
+  --disable-crash-reporter
+  --disable-features=Translate
+  --disable-print-preview
+  --disable-session-crashed-bubble
+  --disable-sync
+  --disable-dev-shm-usage
+  --noerrdialogs
+  --no-proxy-server
+  --overscroll-history-navigation=0
+  --password-store=basic
+  "${whatsapp_extra_flags[@]}"
+)
+
+while true; do
+  browser_pids=()
+  if truthy "${KIOSK_WHATSAPP_PANEL}"; then
+    "${whatsapp_browser_command[@]}" &
+    whatsapp_pid=$!
+    browser_pids+=("${whatsapp_pid}")
+    sleep 0.4
+    "${split_status_browser_command[@]}" &
+    status_pid=$!
+    browser_pids+=("${status_pid}")
+    restack_hdmi_windows &
+  else
+    "${browser_command[@]}" &
+    browser_pid=$!
+    browser_pids+=("${browser_pid}")
+    force_single_hdmi_window &
+  fi
+
+  set +e
+  wait -n "${browser_pids[@]}"
+  browser_status=$?
+  set -e
+  terminate_browsers
+
+  if bastion_key_present; then
+    clear_manual_state
+    restore_wf_panel
+    echo "HDMI kiosk browser exited with bastion key present; manual kiosk disabled" >&2
+    exit 0
+  fi
+
+  if truthy "${KIOSK_RESTART_ON_KEY_ABSENT}"; then
+    echo "HDMI kiosk browser exited with status ${browser_status}; bastion key absent, relaunching" >&2
+    sleep 1
+    continue
+  fi
+
+  restore_wf_panel
+  exit "${browser_status}"
+done

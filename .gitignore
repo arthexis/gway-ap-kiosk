@@ -1,0 +1,14 @@
+.state/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+*.jsonl
+*.token
+.env
+*.env
+!*.env.template
+ap-password.txt
+cards.txt
+

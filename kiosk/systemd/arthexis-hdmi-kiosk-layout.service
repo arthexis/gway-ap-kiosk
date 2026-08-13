@@ -1,0 +1,10 @@
+[Unit]
+Description=Apply Arthexis HDMI kiosk layout for bastion key state
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/arthexis-hdmi-kiosk-layout
+
+[Install]
+WantedBy=multi-user.target

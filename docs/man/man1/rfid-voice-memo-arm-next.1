@@ -1,0 +1,22 @@
+.TH RFID-VOICE-MEMO-ARM-NEXT 1 "2026-07-28" "GWAY local tools" "User Commands"
+.SH NAME
+rfid-voice-memo-arm-next \- bind the next distinct card to voice memo mode
+.SH SYNOPSIS
+.B rfid-voice-memo-arm-next
+.RI [ options ]
+.SH DESCRIPTION
+Waits for the next distinct RFID card, then binds it to the local voice memo
+record/play workflow.
+.SH OPTIONS
+.TP
+.BI --scan-file " FILE"
+Scan file to watch.
+.TP
+.BI --timeout " SECONDS"
+Maximum wait time.
+.TP
+.B --force
+Replace an existing binding.
+.SH SEE ALSO
+.BR rfid-voice-memo (1),
+.BR rfid-register (1)

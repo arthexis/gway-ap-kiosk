@@ -1,0 +1,21 @@
+[Unit]
+Description=GWAY local kiosk status server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=arthe
+Group=arthe
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/arthe/.local/bin/gway-kiosk-status --host 127.0.0.1 --port 8899
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

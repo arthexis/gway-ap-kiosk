@@ -1,0 +1,44 @@
+.TH RFID-COMMANDS 1 "2026-07-28" "GWAY local tools" "User Commands"
+.SH NAME
+rfid-commands \- overview of local RFID scan and command tools
+.SH DESCRIPTION
+The local RFID command system has three main layers:
+.PP
+.B rfid-scan-publisher
+owns the RC522 hardware and writes passive scan state.
+.PP
+.B rfid-mode-runner
+watches the scan file and interprets
+.I /home/arthe/.config/rfid-modes/cards
+as a card-driven state machine.
+.PP
+.B rfid-register
+creates directories and scripts in that state tree.
+.SH EXAMPLES
+.nf
+/home/arthe/.local/bin/rfid-register --list
+/home/arthe/.local/bin/rfid-mode-runner --status
+/home/arthe/.local/bin/rfid-register --latest --dir
+/home/arthe/.local/bin/rfid-register --path FIRST_CARD --wait --command 'date >> /home/arthe/rfid-runs.log'
+/home/arthe/.local/bin/rfid-mode-runner --once --dry-run
+systemctl status rfid-scan-publisher.service --no-pager
+.fi
+.SH FILES
+.TP
+.I /home/arthe/.local/state/rfid-mode/rfid-scan.json
+Latest local RFID scan state.
+.TP
+.I /home/arthe/.config/rfid-modes/cards
+Card state tree and command scripts.
+.TP
+.I /home/arthe/.config/rfid-modes/logs/events.ndjson
+Mode-runner event log.
+.SH SAFETY
+Do not put secrets in card scripts. Do not bind unknown cards to destructive
+commands. Avoid overwriting high-value cards unless that replacement is
+explicitly intended.
+.SH SEE ALSO
+.BR rfid-register (1),
+.BR rfid-mode-runner (1),
+.BR rfid-scan-publisher (1),
+.BR rfid-clear-current (1)

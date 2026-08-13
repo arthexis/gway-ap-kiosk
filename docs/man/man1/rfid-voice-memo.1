@@ -1,0 +1,29 @@
+.TH RFID-VOICE-MEMO 1 "2026-07-28" "GWAY local tools" "User Commands"
+.SH NAME
+rfid-voice-memo \- record, play, bind, and inspect RFID voice memos
+.SH SYNOPSIS
+.B rfid-voice-memo
+.I command
+.RI [ options ]
+.SH DESCRIPTION
+Stores short Jabra voice memos keyed by RFID card and can bind a card to record
+or play actions through the RFID mode tree.
+.SH COMMANDS
+.TP
+.B record
+Record a memo for a card.
+.TP
+.B play
+Play a stored memo for a card.
+.TP
+.B bind
+Create sidecar scripts for record/play actions.
+.TP
+.B status
+Show local memo status.
+.TP
+.B arm-next
+Arm the next distinct card for voice memo behavior.
+.SH SEE ALSO
+.BR rfid-record-30s (1),
+.BR rfid-voice-memo-arm-next (1)

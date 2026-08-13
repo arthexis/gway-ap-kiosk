@@ -1,0 +1,10 @@
+[Unit]
+Description=Arthexis Wi-Fi role supervisor
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=oneshot
+StateDirectory=arthexis-wifi-role
+EnvironmentFile=-/etc/default/arthexis-wifi-role
+ExecStart=/usr/local/bin/arthexis-wifi-role

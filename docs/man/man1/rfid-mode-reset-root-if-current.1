@@ -1,0 +1,21 @@
+.TH RFID-MODE-RESET-ROOT-IF-CURRENT 1 "2026-07-28" "GWAY local tools" "User Commands"
+.SH NAME
+rfid-mode-reset-root-if-current \- return RFID navigation to root after one-shot actions
+.SH SYNOPSIS
+.B rfid-mode-reset-root-if-current
+.RI [ options ]
+.SH DESCRIPTION
+Resets the RFID mode-runner navigation state to root only when the current state
+still matches the provided card, script, and latest scan values.
+.SH OPTIONS
+.TP
+.BI --config-dir " DIR"
+RFID mode configuration directory.
+.TP
+.BI --card " CARD"
+Expected current card.
+.TP
+.BI --script " FILE"
+Expected current script path.
+.SH SEE ALSO
+.BR rfid-mode-runner (1)

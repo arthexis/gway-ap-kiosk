@@ -1,0 +1,17 @@
+[Unit]
+Description=Local RFID card mode runner
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=/home/arthe/.local/bin/rfid-mode-runner
+Restart=on-failure
+RestartSec=2
+Environment=PYTHONUNBUFFERED=1
+Environment=RFID_MODE_SCAN_FILE=/home/arthe/.local/state/rfid-mode/rfid-scan.json
+Environment=RFID_MODE_RFID_SERVICE_UNIT=rfid-scan-publisher.service
+Environment=RFID_MODE_SOUND_RUN=attention
+Environment=RFID_MODE_SOUND_COPY_COMPLETE=ok
+
+[Install]
+WantedBy=default.target

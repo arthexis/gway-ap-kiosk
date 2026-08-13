@@ -1,0 +1,15 @@
+[Unit]
+Description=GWAY AP consent and activity monitoring portal
+After=network-online.target NetworkManager.service nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/arthe/gway-ap-kiosk
+ExecStart=/home/arthe/gway-ap-kiosk/.venv/bin/python /home/arthe/gway-ap-kiosk/scripts/ap_portal_server.py --bind 127.0.0.1 --port 9080 --state-dir /home/arthe/gway-ap-kiosk/.state/ap_portal --suite-login-host arthexis.net --source-url https://example.invalid/gway-ap-kiosk/scripts/ap_portal_server.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+

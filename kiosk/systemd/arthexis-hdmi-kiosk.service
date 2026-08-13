@@ -1,0 +1,20 @@
+[Unit]
+Description=Arthexis HDMI kiosk
+After=lightdm.service gway-kiosk-status.service
+Wants=gway-kiosk-status.service
+ConditionPathExists=/usr/local/sbin/arthexis-hdmi-kiosk-session
+
+[Service]
+Type=simple
+User=arthe
+Group=arthe
+WorkingDirectory=/home/arthe
+EnvironmentFile=/etc/default/arthexis-hdmi-kiosk
+ExecStart=/usr/local/sbin/arthexis-hdmi-kiosk-session
+Restart=on-failure
+RestartSec=5
+SuccessExitStatus=75
+RestartPreventExitStatus=75
+
+[Install]
+WantedBy=multi-user.target

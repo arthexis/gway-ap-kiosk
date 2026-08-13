@@ -1,0 +1,11 @@
+[Unit]
+Description=Watch AP browser authorization files for nftables sync
+After=gway-ap-portal.service
+
+[Path]
+PathChanged=/home/arthe/gway-ap-kiosk/.state/ap_portal/authorized_macs.txt
+PathChanged=/home/arthe/gway-ap-kiosk/.state/ap_portal/trusted_macs.txt
+Unit=gway-ap-authorized-firewall-sync.service
+
+[Install]
+WantedBy=multi-user.target

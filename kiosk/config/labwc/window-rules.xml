@@ -1,0 +1,13 @@
+<windowRules>
+  <windowRule identifier="arthexis-hdmi-kiosk" serverDecoration="no" skipTaskbar="yes" skipWindowSwitcher="yes" fixedPosition="yes" />
+  <windowRule identifier="arthexis-hdmi-kiosk">
+    <action name="SetDecorations" decorations="none" />
+    <action name="MoveToOutput" output="HDMI-A-2" />
+    <action name="Raise" />
+  </windowRule>
+  <windowRule identifier="*arthexis-hdmi-kiosk*">
+    <action name="MoveToOutput" output="HDMI-A-2" />
+    <action name="ToggleFullscreen" />
+  </windowRule>
+</windowRules>
+

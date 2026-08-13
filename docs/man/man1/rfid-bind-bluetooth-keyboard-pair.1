@@ -1,0 +1,30 @@
+.TH RFID-BIND-BLUETOOTH-KEYBOARD-PAIR 1 "2026-07-28" "GWAY local tools" "User Commands"
+.SH NAME
+rfid-bind-bluetooth-keyboard-pair \- bind an RFID card to Bluetooth keyboard pairing
+.SH SYNOPSIS
+.B rfid-bind-bluetooth-keyboard-pair
+.RB ( --wait | --latest | --card
+.IR CARD )
+.RI [ options ]
+.SH DESCRIPTION
+Creates a hold action under the selected RFID card directory. Holding that card
+opens a bounded Bluetooth keyboard pairing window.
+.SH OPTIONS
+.TP
+.B --wait
+Wait for the next card.
+.TP
+.B --latest
+Use the latest scan.
+.TP
+.BI --card " CARD"
+Bind a specific card ID.
+.TP
+.B --force
+Replace existing files.
+.TP
+.B --dry-run
+Print intended changes without writing them.
+.SH SEE ALSO
+.BR rfid-bluetooth-keyboard-pair (1),
+.BR rfid-register (1)

@@ -1,0 +1,22 @@
+[Unit]
+Description=RFID scanner service for Arthexis
+After=replicant.service network-online.target
+Wants=replicant.service
+PartOf=replicant.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/arthe/replicant
+EnvironmentFile=-/home/arthe/replicant/redis.env
+EnvironmentFile=-/home/arthe/replicant/debug.env
+ExecStart=/home/arthe/replicant/.venv/bin/python -m apps.cards.rfid_service
+Restart=always
+TimeoutStartSec=500
+StandardOutput=journal
+StandardError=journal
+User=arthe
+
+[Install]
+WantedBy=multi-user.target
+WantedBy=replicant.service

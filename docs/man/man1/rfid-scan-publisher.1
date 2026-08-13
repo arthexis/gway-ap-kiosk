@@ -1,0 +1,46 @@
+.TH RFID-SCAN-PUBLISHER 1 "2026-07-28" "GWAY local tools" "User Commands"
+.SH NAME
+rfid-scan-publisher \- standalone local RFID scan producer
+.SH SYNOPSIS
+.B rfid-scan-publisher
+.RI [ options ]
+.SH DESCRIPTION
+.B rfid-scan-publisher
+owns the local RC522 reader and publishes scans without importing the Arthexis
+runtime. It writes latest-scan JSON, scan logs, status JSON, LCD events, and
+optional card-list entries for local consumers.
+.SH OPTIONS
+.TP
+.BI --scan-file " FILE"
+Path for latest scan JSON.
+.TP
+.BI --log-file " FILE"
+Path for append-only scan log.
+.TP
+.BI --status-file " FILE"
+Path for publisher status JSON.
+.TP
+.BI --cards-file " FILE"
+Optional plain card list to append newly scanned UIDs to.
+.TP
+.BI --spi-bus " N"
+SPI bus number.
+.TP
+.BI --spi-device " N"
+SPI device number.
+.TP
+.BI --rst-pin " N"
+RC522 reset pin. The local default is BCM 25.
+.TP
+.B --once
+Wait for one scan, publish it, and exit.
+.SH EXAMPLES
+.nf
+systemctl status rfid-scan-publisher.service --no-pager
+cat /home/arthe/.local/state/rfid-mode/rfid-scan-publisher.json
+/home/arthe/.local/share/rfid-mode/.venv/bin/python /home/arthe/.local/bin/rfid-scan-publisher --once --once-timeout 5
+.fi
+.SH SEE ALSO
+.BR rfid-commands (1),
+.BR rfid-register (1),
+.BR rfid-mode-runner (1)

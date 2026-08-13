@@ -1,0 +1,53 @@
+.TH RFID-MODE-RUNNER 1 "2026-07-28" "GWAY local tools" "User Commands"
+.SH NAME
+rfid-mode-runner \- run local modes selected by RFID card paths
+.SH SYNOPSIS
+.B rfid-mode-runner
+.RI [ options ]
+.SH DESCRIPTION
+.B rfid-mode-runner
+watches the RFID scan JSON file and interprets
+.I /home/arthe/.config/rfid-modes/cards
+as a state machine. It starts, stops, and supervises command scripts created by
+.BR rfid-register (1).
+.SH OPTIONS
+.TP
+.BI --scan-file " FILE"
+Read scans from
+.IR FILE .
+.TP
+.BI --config-dir " DIR"
+Use a non-default RFID mode config directory.
+.TP
+.B --once
+Process the current scan once and exit.
+.TP
+.B --dry-run
+Log actions without starting or stopping scripts.
+.TP
+.B --status
+Print the current runner state JSON.
+.TP
+.B --stop-current
+Stop the currently running mode process.
+.SH SCRIPT ENVIRONMENT
+Started scripts receive variables such as
+.BR RFID_MODE_CARD_ID ,
+.BR RFID_MODE_SCANNED_AT ,
+.BR RFID_MODE_SCAN_FILE ,
+.BR RFID_MODE_KIND ,
+.BR RFID_MODE_STATE_PATH ,
+.BR RFID_MODE_HOLD ,
+and
+.BR RFID_MODE_NEW .
+.SH EXAMPLES
+.nf
+/home/arthe/.local/bin/rfid-mode-runner --status
+/home/arthe/.local/bin/rfid-mode-runner --once --dry-run
+/home/arthe/.local/bin/rfid-mode-runner --stop-current
+systemctl --user status rfid-mode-runner.service --no-pager
+.fi
+.SH SEE ALSO
+.BR rfid-commands (1),
+.BR rfid-register (1),
+.BR rfid-scan-publisher (1)

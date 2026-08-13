@@ -1,0 +1,12 @@
+*.bak
+*.bak-*
+*.codex-backup-*
+*.pyc
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+state/
+secrets/
+*.token
+*.secret
+

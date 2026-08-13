@@ -1,0 +1,33 @@
+.TH KIOSK-MODE 1 "August 2026" "gway-001" "User Commands"
+.SH NAME
+kiosk-mode \- enable or disable the Arthexis HDMI kiosk with the bastion key
+.SH SYNOPSIS
+.B kiosk-mode
+[\fBon\fR|\fBoff\fR|\fBstatus\fR]
+.SH DESCRIPTION
+.B kiosk-mode
+controls the host-local Arthexis HDMI kiosk manual override. The command uses
+.B /usr/local/libexec/bastion-key-present
+as the bastion USB verifier.
+.PP
+.B kiosk-mode on
+creates a temporary manual kiosk state and starts
+.B arthexis-hdmi-kiosk-layout.service
+so the HDMI kiosk opens even while the verified key is present.
+.PP
+.B kiosk-mode off
+removes that manual state and starts the layout service again. If the key is not
+verified, disabling is refused and kiosk mode remains mandatory.
+.PP
+.B kiosk-mode status
+prints the verifier state, manual state, kiosk service state, and state-file
+path.
+.SH FILES
+.TP
+.I /run/user/1000/arthexis-hdmi-kiosk/manual-enabled
+Temporary manual kiosk state file.
+.TP
+.I /etc/default/arthexis-hdmi-kiosk
+HDMI kiosk session environment.
+.SH SEE ALSO
+.BR systemctl (1)

@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+config_dir="${RFID_MODE_CONFIG_DIR:-$HOME/.config/rfid-modes}"
+register_bin="${RFID_REGISTER_BIN:-/home/arthe/.local/bin/rfid-register}"
+pair_bin="${RFID_BT_KEYBOARD_PAIR_BIN:-/home/arthe/.local/bin/rfid-bluetooth-keyboard-pair}"
+duration="${RFID_BT_KEYBOARD_PAIR_SECONDS:-30}"
+force=0
+mode=""
+card=""
+dry_run=0
+
+default_scan_file() {
+  if [ -n "${RFID_MODE_SCAN_FILE:-}" ]; then
+    printf '%s\n' "$RFID_MODE_SCAN_FILE"
+    return
+  fi
+  local config_file="${RFID_MODE_SCAN_FILE_CONFIG:-$config_dir/scan-file}"
+  if [ -s "$config_file" ]; then
+    sed -n '1{s/[[:space:]]*$//;p;q;}' "$config_file"
+    return
+  fi
+  if [ -e "$HOME/.local/state/rfid-mode/rfid-scan.json" ]; then
+    printf '%s\n' "$HOME/.local/state/rfid-mode/rfid-scan.json"
+    return
+  fi
+  if [ -e /home/arthe/arthexis/.locks/rfid-scan.json ]; then
+    printf '%s\n' /home/arthe/arthexis/.locks/rfid-scan.json
+    return
+  fi
+  printf '%s\n' "$HOME/.local/state/rfid-mode/rfid-scan.json"
+}
+
+scan_file="$(default_scan_file)"
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  rfid-bind-bluetooth-keyboard-pair --wait [--force]
+  rfid-bind-bluetooth-keyboard-pair --latest [--force]
+  rfid-bind-bluetooth-keyboard-pair --card RFID [--force]
+  rfid-bind-bluetooth-keyboard-pair --dry-run --card RFID
+
+Binds a chosen RFID card as a hold-to-pair Bluetooth keyboard command.
+The generated hold action opens a bounded pairing window and displays
+Bluetooth PIN/passkey prompts on the LCD.
+USAGE
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --wait|--latest)
+      [ -z "$mode" ] || { echo "choose only one card source" >&2; exit 64; }
+      mode="${1#--}"
+      shift
+      ;;
+    --card)
+      [ -z "$mode" ] || { echo "choose only one card source" >&2; exit 64; }
+      mode="card"
+      card="${2:-}"
+      [ -n "$card" ] || { echo "--card requires a value" >&2; exit 64; }
+      shift 2
+      ;;
+    --force)
+      force=1
+      shift
+      ;;
+    --dry-run)
+      dry_run=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      usage >&2
+      exit 64
+      ;;
+  esac
+done
+
+[ -n "$mode" ] || { echo "choose --wait, --latest, or --card" >&2; exit 64; }
+[ -x "$register_bin" ] || { echo "rfid-register not executable: $register_bin" >&2; exit 1; }
+[ -x "$pair_bin" ] || { echo "pair command not executable: $pair_bin" >&2; exit 1; }
+
+normalize_card() {
+  printf '%s' "$1" | tr '[:lower:]' '[:upper:]' | tr -d ': ' | sed 's/[^A-Z0-9_.-]/_/g'
+}
+
+latest_card() {
+  python3 - "$scan_file" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+path = Path(sys.argv[1])
+payload = json.loads(path.read_text(encoding="utf-8"))
+value = str(payload.get("rfid") or payload.get("card_id") or payload.get("uid") or "")
+value = re.sub(r"[^A-Z0-9_.-]+", "_", value.strip().upper().replace(":", "").replace(" ", ""))
+if not value:
+    raise SystemExit("no RFID in scan file")
+print(value)
+PY
+}
+
+if [ "$mode" = "card" ]; then
+  target_card="$(normalize_card "$card")"
+elif [ "$mode" = "latest" ]; then
+  target_card="$(latest_card)"
+else
+  if [ "$dry_run" -eq 1 ]; then
+    target_card="DRYRUNWAIT"
+  else
+    "$register_bin" --wait --dir --label "bluetooth keyboard pair" ${force:+--force}
+    target_card="$(latest_card)"
+  fi
+fi
+
+[ -n "$target_card" ] || { echo "target card is empty" >&2; exit 1; }
+target_dir="$config_dir/cards/$target_card"
+hold_script="$target_dir/hold.sh"
+label_file="$target_dir/label.txt"
+
+if [ "$dry_run" -eq 1 ]; then
+  printf 'dry-run: target card %s\n' "$target_card"
+  printf 'dry-run: mkdir -p %q\n' "$target_dir"
+  printf 'dry-run: write %q\n' "$label_file"
+  printf 'dry-run: write %q -> %s --duration %s\n' "$hold_script" "$pair_bin" "$duration"
+  exit 0
+fi
+
+if [ "$mode" != "wait" ]; then
+  "$register_bin" --card "$target_card" --dir --label "bluetooth keyboard pair" ${force:+--force}
+fi
+
+cat > "$label_file" <<'LABEL'
+BT KEYBOARD:
+HOLD TO PAIR
+LABEL
+
+cat > "$hold_script" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+exec "$pair_bin" --duration "$duration" --pin-seconds 30
+EOF
+chmod 0755 "$hold_script"
+
+printf 'Registered Bluetooth keyboard pairing card: %s\n' "$target_card"
+printf 'Hold action: %s\n' "$hold_script"

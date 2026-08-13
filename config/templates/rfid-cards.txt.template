@@ -1,0 +1,4 @@
+# One RFID idTag per line. Add an optional label after a comma.
+# Lines beginning with # are ignored.
+#
+# CARD_ID_HEX, Example label

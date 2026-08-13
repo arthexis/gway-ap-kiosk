@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REAL_NMCLI=/usr/bin/nmcli
+ROTATE=/usr/local/sbin/prodigy-ap-password
+
+should_rotate=0
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  if [[ "${args[$i]}" == "connection" || "${args[$i]}" == "con" ]]; then
+    next=$((i + 1))
+    if (( next < ${#args[@]} )) && [[ "${args[$next]}" == "up" ]]; then
+      for token in "${args[@]}"; do
+        if [[ "$token" == "PRODIGY" ]]; then
+          should_rotate=1
+          break
+        fi
+      done
+    fi
+  fi
+done
+
+if (( should_rotate )); then
+  "$ROTATE" ensure >/dev/null
+fi
+
+exec "$REAL_NMCLI" "$@"

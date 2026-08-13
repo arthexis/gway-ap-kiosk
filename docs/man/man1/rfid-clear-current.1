@@ -1,0 +1,19 @@
+.TH RFID-CLEAR-CURRENT 1 "2026-07-28" "GWAY local tools" "User Commands"
+.SH NAME
+rfid-clear-current \- clear local RFID mode, arm, and wait state
+.SH SYNOPSIS
+.B rfid-clear-current
+.SH DESCRIPTION
+.B rfid-clear-current
+stops the current RFID mode process group, stops RFID arm/wait helper units or
+processes, resets the mode-runner navigation state to root, clears the arm LCD
+event, and writes an LCD event reading
+.BR "RF QUEUE" /
+.BR "CLEARED" .
+.SH ENVIRONMENT
+.TP
+.B RFID_MODE_CARD_ID
+Optional current card identifier recorded in the clear event.
+.SH SEE ALSO
+.BR rfid-mode-runner (1),
+.BR rfid-arm-next-script (1)

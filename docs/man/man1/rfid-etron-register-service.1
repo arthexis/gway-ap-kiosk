@@ -1,0 +1,28 @@
+.TH RFID-ETRON-REGISTER-SERVICE 1 "2026-07-28" "GWAY local tools" "User Commands"
+.SH NAME
+rfid-etron-register-service \- run suite RFID scanning in e-tron registration mode
+.SH SYNOPSIS
+.B rfid-etron-register-service
+.RI [ options ]
+.SH DESCRIPTION
+Runs the suite RFID service while appending newly scanned UIDs to a plain
+e-tron
+.I cards.txt
+file. It can disable suite command-card execution while registration mode is
+active.
+.SH OPTIONS
+.TP
+.BI --cards-file " FILE"
+Plain e-tron cards file to append new RFID UIDs to.
+.TP
+.BI --host " HOST"
+RFID UDP host override.
+.TP
+.BI --port " PORT"
+RFID UDP port override.
+.TP
+.B --allow-command-cards
+Keep suite command-card execution enabled.
+.SH SEE ALSO
+.BR rfid-scan-publisher (1),
+.BR rfid-commands (1)

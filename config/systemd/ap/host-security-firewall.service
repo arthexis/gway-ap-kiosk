@@ -1,0 +1,14 @@
+[Unit]
+Description=Host security nftables rules
+Wants=network-online.target
+After=network-online.target NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash -lc '/usr/sbin/nft delete table inet host_security >/dev/null 2>&1 || true; exec /usr/sbin/nft -f /etc/nftables.d/host-security.nft'
+ExecStop=-/usr/sbin/nft delete table inet host_security
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+

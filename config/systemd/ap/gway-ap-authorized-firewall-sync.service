@@ -1,0 +1,12 @@
+[Unit]
+Description=Sync AP browser-authorized MACs into nftables
+After=host-security-firewall.service gway-ap-portal.service
+Wants=host-security-firewall.service gway-ap-portal.service
+
+[Service]
+Type=oneshot
+Environment=STATE_DIR=/home/arthe/gway-ap-kiosk/.state/ap_portal
+ExecStart=/home/arthe/gway-ap-kiosk/scripts/ap/gway-ap-authorized-firewall-sync
+
+[Install]
+WantedBy=multi-user.target

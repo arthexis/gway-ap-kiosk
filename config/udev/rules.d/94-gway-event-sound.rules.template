@@ -1,0 +1,15 @@
+# Immediate audible cues for short hotplug transitions that polling can miss.
+#
+# Replace the example bastion selectors with local values from:
+#
+#   udevadm info --query=property --name=/dev/<partition>
+#
+# Do not commit filled serial numbers or filesystem UUIDs.
+
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_SERIAL_SHORT}=="<BASTION_ID_SERIAL_SHORT>", TAG+="systemd", ENV{SYSTEMD_WANTS}+="gway-event-sound-hotplug@bastion-add.service"
+ACTION=="remove", SUBSYSTEM=="block", ENV{ID_SERIAL_SHORT}=="<BASTION_ID_SERIAL_SHORT>", TAG+="systemd", ENV{SYSTEMD_WANTS}+="gway-event-sound-hotplug@bastion-remove.service"
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_UUID}=="<BASTION_ID_FS_UUID>", TAG+="systemd", ENV{SYSTEMD_WANTS}+="gway-event-sound-hotplug@bastion-add.service"
+ACTION=="remove", SUBSYSTEM=="block", ENV{ID_FS_UUID}=="<BASTION_ID_FS_UUID>", TAG+="systemd", ENV{SYSTEMD_WANTS}+="gway-event-sound-hotplug@bastion-remove.service"
+
+ACTION=="add", SUBSYSTEM=="net", ENV{ID_BUS}=="usb", ENV{DEVTYPE}=="wlan", TAG+="systemd", ENV{SYSTEMD_WANTS}+="gway-event-sound-hotplug@wifi-add.service"
+ACTION=="remove", SUBSYSTEM=="net", ENV{ID_BUS}=="usb", ENV{DEVTYPE}=="wlan", TAG+="systemd", ENV{SYSTEMD_WANTS}+="gway-event-sound-hotplug@wifi-remove.service"

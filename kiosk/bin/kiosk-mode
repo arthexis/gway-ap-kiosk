@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+BASTION_CHECK="${KIOSK_BASTION_CHECK:-/usr/local/libexec/bastion-key-present}"
+MANUAL_STATE_FILE="${KIOSK_MANUAL_STATE_FILE:-/run/user/1000/arthexis-hdmi-kiosk/manual-enabled}"
+LAYOUT_SERVICE="${KIOSK_LAYOUT_SERVICE:-arthexis-hdmi-kiosk-layout.service}"
+KIOSK_SERVICE="${KIOSK_SERVICE:-arthexis-hdmi-kiosk.service}"
+
+notify() {
+  local message="$1"
+  if command -v notify-send >/dev/null 2>&1; then
+    notify-send "Kiosk Mode" "${message}" >/dev/null 2>&1 || true
+  fi
+}
+
+key_present() {
+  [[ -x "${BASTION_CHECK}" ]] && "${BASTION_CHECK}" --quiet >/dev/null 2>&1
+}
+
+run_systemctl() {
+  if [[ ${EUID} -eq 0 ]]; then
+    systemctl "$@"
+  else
+    sudo -n systemctl "$@"
+  fi
+}
+
+write_manual_state() {
+  local state_dir tmp_file
+  state_dir="$(dirname "${MANUAL_STATE_FILE}")"
+  mkdir -p "${state_dir}"
+  chmod 0700 "${state_dir}"
+  tmp_file="${MANUAL_STATE_FILE}.$$"
+  {
+    printf 'enabled_at=%s\n' "$(date --iso-8601=seconds)"
+    printf 'enabled_by=%s\n' "$(id -un)"
+  } > "${tmp_file}"
+  chmod 0600 "${tmp_file}"
+  mv -f "${tmp_file}" "${MANUAL_STATE_FILE}"
+}
+
+enable_kiosk() {
+  if ! key_present; then
+    notify "Bastion key is not verified; kiosk remains mandatory."
+    run_systemctl start "${LAYOUT_SERVICE}" >/dev/null
+    echo "Bastion key is not verified; kiosk remains mandatory." >&2
+    return 1
+  fi
+
+  write_manual_state
+  run_systemctl start "${LAYOUT_SERVICE}" >/dev/null
+  notify "HDMI kiosk enabled. Press Ctrl+Q with the key in to leave it."
+}
+
+disable_kiosk() {
+  if ! key_present; then
+    notify "Bastion key is not verified; kiosk remains mandatory."
+    run_systemctl start "${LAYOUT_SERVICE}" >/dev/null
+    echo "Bastion key is not verified; kiosk remains mandatory." >&2
+    return 1
+  fi
+
+  rm -f "${MANUAL_STATE_FILE}"
+  run_systemctl start "${LAYOUT_SERVICE}" >/dev/null
+  notify "HDMI kiosk disabled."
+}
+
+status_kiosk() {
+  local key_state="absent"
+  local manual_state="off"
+  local service_state
+
+  if key_present; then
+    key_state="present"
+  fi
+  if [[ -e "${MANUAL_STATE_FILE}" ]]; then
+    manual_state="on"
+  fi
+  service_state="$(systemctl is-active "${KIOSK_SERVICE}" 2>/dev/null || true)"
+  printf 'bastion_key=%s\n' "${key_state}"
+  printf 'manual_kiosk=%s\n' "${manual_state}"
+  printf 'service=%s\n' "${service_state:-unknown}"
+  printf 'manual_state_file=%s\n' "${MANUAL_STATE_FILE}"
+}
+
+usage() {
+  cat <<'EOF'
+Usage: kiosk-mode [on|off|status]
+
+Enable or disable the host-local Arthexis HDMI kiosk when the bastion USB key
+is verified. Disabling is refused while the key is absent so kiosk mode remains
+mandatory.
+EOF
+}
+
+command="${1:-on}"
+case "${command}" in
+  on|enable|start)
+    enable_kiosk
+    ;;
+  off|disable|stop)
+    disable_kiosk
+    ;;
+  status)
+    status_kiosk
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

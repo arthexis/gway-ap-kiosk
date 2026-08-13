@@ -1,0 +1,38 @@
+.TH RFID-ARM-NEXT-SCRIPT 1 "2026-07-28" "GWAY local tools" "User Commands"
+.SH NAME
+rfid-arm-next-script \- bind the next distinct RFID card to a script
+.SH SYNOPSIS
+.B rfid-arm-next-script
+.B --script
+.I FILE
+.B --display-name
+.I TEXT
+.B --label-line1
+.I TEXT
+.RI [ options ]
+.SH DESCRIPTION
+Arms the local RFID system, waits for the next distinct card scan, registers
+that card as a directory plus sidecar action, seeds runner state to avoid
+immediate retriggers, and restarts the mode runner.
+.SH OPTIONS
+.TP
+.BI --script " FILE"
+Script to bind.
+.TP
+.BI --display-name " TEXT"
+Short LCD display name while armed.
+.TP
+.BI --label-line1 " TEXT"
+First card label line.
+.TP
+.BI --label-line2 " TEXT"
+Second card label line.
+.TP
+.BI --timeout " SECONDS"
+Maximum wait time.
+.TP
+.B --force
+Replace existing binding.
+.SH SEE ALSO
+.BR rfid-register (1),
+.BR rfid-clear-current (1)

@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+import argparse
+import fcntl
+import os
+import pwd
+import re
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+
+DEFAULTS = {
+    "KIOSK_LAYOUT_CONFIG_FILE": "/etc/default/arthexis-hdmi-kiosk-layout",
+    "KIOSK_LAYOUT_ENV_FILE": "/etc/default/arthexis-hdmi-kiosk",
+    "KIOSK_LAYOUT_LABWC_RC": "/home/arthe/.config/labwc/rc.xml",
+    "KIOSK_LAYOUT_LABWC_USER": "arthe",
+    "KIOSK_LAYOUT_SERVICE": "arthexis-hdmi-kiosk.service",
+    "KIOSK_LAYOUT_KEY_UUID": "82EB-36B8",
+    "KIOSK_LAYOUT_BASTION_CHECK": "/usr/local/libexec/bastion-key-present",
+    "KIOSK_LAYOUT_DEFAULT_OUTPUT": "HDMI-A-2",
+    "KIOSK_LAYOUT_KEY_OUTPUT": "HDMI-A-1",
+    "KIOSK_LAYOUT_RESTART_ON_CHANGE": "1",
+    "KIOSK_LAYOUT_RELOAD_LABWC_ON_CHANGE": "1",
+    "KIOSK_LAYOUT_SUSPEND_ON_KEY_PRESENT": "1",
+    "KIOSK_LAYOUT_RESUME_ON_KEY_ABSENT": "1",
+    "KIOSK_LAYOUT_MANUAL_STATE_FILE": "/run/user/1000/arthexis-hdmi-kiosk/manual-enabled",
+}
+
+
+def load_env_file(path):
+    data = {}
+    path = Path(path)
+    if not path.exists():
+        return data
+    for raw_line in path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        data[key] = value
+    return data
+
+
+def truthy(value):
+    return str(value).strip().lower() in {"1", "yes", "true", "on"}
+
+
+def uuid_key_present(uuid):
+    if not uuid:
+        return False
+    if Path("/dev/disk/by-uuid", uuid).exists():
+        return True
+    result = subprocess.run(
+        ["findmnt", "-rn", "-S", f"UUID={uuid}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def key_present(settings):
+    checker = str(settings.get("KIOSK_LAYOUT_BASTION_CHECK") or "").strip()
+    if checker and Path(checker).exists():
+        result = subprocess.run(
+            [checker, "--quiet"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return result.returncode == 0
+    return uuid_key_present(settings.get("KIOSK_LAYOUT_KEY_UUID", ""))
+
+
+def manual_kiosk_enabled(settings, present, dry_run=False):
+    raw_state_file = str(settings.get("KIOSK_LAYOUT_MANUAL_STATE_FILE") or "").strip()
+    if not raw_state_file:
+        return False
+    state_file = Path(raw_state_file)
+    enabled = state_file.exists()
+    if not present and enabled and not dry_run:
+        try:
+            state_file.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print(f"manual_state_clear=failed:{exc}", file=sys.stderr)
+        return False
+    return present and enabled
+
+
+def replace_env_values(path, replacements, dry_run=False):
+    path = Path(path)
+    text = path.read_text() if path.exists() else ""
+    lines = text.splitlines()
+    found = {key: False for key in replacements}
+    changed = False
+    output = []
+    for line in lines:
+        matched = False
+        for key, value in replacements.items():
+            if re.match(rf"^\s*{re.escape(key)}=", line):
+                found[key] = True
+                new_line = f"{key}={value}"
+                if line != new_line:
+                    changed = True
+                output.append(new_line)
+                matched = True
+                break
+        if not matched:
+            output.append(line)
+    for key, value in replacements.items():
+        if not found[key]:
+            output.append(f"{key}={value}")
+            changed = True
+    new_text = "\n".join(output) + "\n"
+    if changed and not dry_run:
+        path.write_text(new_text)
+    return changed
+
+
+def qname(namespace, name):
+    return f"{{{namespace}}}{name}" if namespace else name
+
+
+def update_labwc_rule(path, app_id, target_output, dry_run=False):
+    path = Path(path)
+    tree = ET.parse(path)
+    root = tree.getroot()
+    namespace = ""
+    if root.tag.startswith("{"):
+        namespace = root.tag[1:].split("}", 1)[0]
+        ET.register_namespace("", namespace)
+
+    window_rules = root.find(qname(namespace, "windowRules"))
+    changed = False
+    if window_rules is None:
+        window_rules = ET.SubElement(root, qname(namespace, "windowRules"))
+        changed = True
+
+    identifier = f"*{app_id}*"
+    target_rule = None
+    for rule in window_rules.findall(qname(namespace, "windowRule")):
+        if rule.get("identifier") != identifier:
+            continue
+        for action in rule.findall(qname(namespace, "action")):
+            if action.get("name") == "MoveToOutput":
+                target_rule = rule
+                break
+        if target_rule is not None:
+            break
+
+    if target_rule is None:
+        target_rule = ET.SubElement(window_rules, qname(namespace, "windowRule"))
+        target_rule.set("identifier", identifier)
+        changed = True
+
+    move_action = None
+    fullscreen_seen = False
+    for action in target_rule.findall(qname(namespace, "action")):
+        if action.get("name") == "MoveToOutput":
+            move_action = action
+        elif action.get("name") == "ToggleFullscreen":
+            fullscreen_seen = True
+
+    if move_action is None:
+        move_action = ET.SubElement(target_rule, qname(namespace, "action"))
+        move_action.set("name", "MoveToOutput")
+        changed = True
+    if move_action.get("output") != target_output:
+        move_action.set("output", target_output)
+        changed = True
+    if not fullscreen_seen:
+        fullscreen_action = ET.SubElement(target_rule, qname(namespace, "action"))
+        fullscreen_action.set("name", "ToggleFullscreen")
+        changed = True
+
+    if changed and not dry_run:
+        ET.indent(tree, space="  ")
+        tree.write(path, encoding="utf-8", xml_declaration=True)
+    return changed
+
+
+def run(cmd, check=False):
+    return subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=check)
+
+
+def reload_labwc(settings):
+    user = settings["KIOSK_LAYOUT_LABWC_USER"]
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        print(f"labwc_reload=skipped missing_user={user}")
+        return
+    result = run(["pgrep", "-u", user, "-x", "labwc"])
+    if result.returncode != 0:
+        print("labwc_reload=skipped no_labwc_process")
+        return
+    pid = result.stdout.splitlines()[0].strip()
+    kiosk_env = load_env_file(settings["KIOSK_LAYOUT_ENV_FILE"])
+    runtime_dir = kiosk_env.get("KIOSK_SESSION_RUNTIME_DIR", f"/run/user/{pw.pw_uid}")
+    wayland_display = kiosk_env.get("KIOSK_WAYLAND_DISPLAY", "wayland-0")
+    display = kiosk_env.get("KIOSK_DISPLAY", ":0")
+    xauthority = kiosk_env.get("KIOSK_XAUTHORITY", f"{pw.pw_dir}/.Xauthority")
+    cmd = [
+        "runuser",
+        "-u",
+        user,
+        "--",
+        "env",
+        f"LABWC_PID={pid}",
+        f"XDG_RUNTIME_DIR={runtime_dir}",
+        f"WAYLAND_DISPLAY={wayland_display}",
+        f"DISPLAY={display}",
+        f"XAUTHORITY={xauthority}",
+        "labwc",
+        "-r",
+    ]
+    result = run(cmd)
+    status = "ok" if result.returncode == 0 else f"failed:{result.returncode}"
+    print(f"labwc_reload={status}")
+    if result.returncode != 0 and result.stderr:
+        print(result.stderr.strip(), file=sys.stderr)
+
+
+def restart_kiosk(service):
+    result = run(["systemctl", "restart", "--no-block", service])
+    status = "queued" if result.returncode == 0 else f"failed:{result.returncode}"
+    print(f"kiosk_restart={status}")
+    if result.returncode != 0 and result.stderr:
+        print(result.stderr.strip(), file=sys.stderr)
+
+
+def start_kiosk(service):
+    result = run(["systemctl", "start", "--no-block", service])
+    status = "queued" if result.returncode == 0 else f"failed:{result.returncode}"
+    print(f"kiosk_start={status}")
+    if result.returncode != 0 and result.stderr:
+        print(result.stderr.strip(), file=sys.stderr)
+
+
+def stop_kiosk(service):
+    result = run(["systemctl", "stop", "--no-block", service])
+    status = "queued" if result.returncode == 0 else f"failed:{result.returncode}"
+    print(f"kiosk_stop={status}")
+    if result.returncode != 0 and result.stderr:
+        print(result.stderr.strip(), file=sys.stderr)
+
+
+def service_active(service):
+    return run(["systemctl", "is-active", "--quiet", service]).returncode == 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Apply Arthexis HDMI kiosk layout based on bastion key presence.")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--force-present", action="store_true")
+    parser.add_argument("--force-absent", action="store_true")
+    parser.add_argument("--no-restart", action="store_true")
+    parser.add_argument("--no-reload", action="store_true")
+    args = parser.parse_args()
+    if args.force_present and args.force_absent:
+        parser.error("--force-present and --force-absent are mutually exclusive")
+
+    lock_path = Path("/run/arthexis-hdmi-kiosk-layout.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("w") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+        settings = dict(DEFAULTS)
+        settings.update(load_env_file(settings["KIOSK_LAYOUT_CONFIG_FILE"]))
+        kiosk_env = load_env_file(settings["KIOSK_LAYOUT_ENV_FILE"])
+        app_id = kiosk_env.get("KIOSK_APP_ID", "arthexis-hdmi-kiosk")
+
+        if args.force_present:
+            present = True
+        elif args.force_absent:
+            present = False
+        else:
+            present = key_present(settings)
+
+        target_output = (
+            settings["KIOSK_LAYOUT_KEY_OUTPUT"]
+            if present
+            else settings["KIOSK_LAYOUT_DEFAULT_OUTPUT"]
+        )
+        manual_enabled = manual_kiosk_enabled(settings, present, dry_run=args.dry_run)
+        suspend_kiosk = (
+            present
+            and truthy(settings["KIOSK_LAYOUT_SUSPEND_ON_KEY_PRESENT"])
+            and not manual_enabled
+        )
+
+        env_changed = replace_env_values(
+            settings["KIOSK_LAYOUT_ENV_FILE"],
+            {
+                "KIOSK_TARGET_OUTPUT": target_output,
+                "KIOSK_REQUIRE_TARGET_OUTPUT": "0",
+                "KIOSK_SUSPEND": "1" if suspend_kiosk else "0",
+            },
+            dry_run=args.dry_run,
+        )
+        rc_changed = update_labwc_rule(
+            settings["KIOSK_LAYOUT_LABWC_RC"],
+            app_id,
+            target_output,
+            dry_run=args.dry_run,
+        )
+        changed = env_changed or rc_changed
+        print(
+            " ".join(
+                [
+                    f"bastion_key={'present' if present else 'absent'}",
+                    f"target_output={target_output}",
+                    f"manual_kiosk={int(manual_enabled)}",
+                    f"kiosk_suspend={int(suspend_kiosk)}",
+                    f"env_changed={int(env_changed)}",
+                    f"labwc_changed={int(rc_changed)}",
+                    f"dry_run={int(args.dry_run)}",
+                ]
+            )
+        )
+
+        if changed and not args.dry_run and not args.no_reload and truthy(settings["KIOSK_LAYOUT_RELOAD_LABWC_ON_CHANGE"]):
+            reload_labwc(settings)
+        if not args.dry_run and not args.no_restart and truthy(settings["KIOSK_LAYOUT_RESTART_ON_CHANGE"]):
+            service = settings["KIOSK_LAYOUT_SERVICE"]
+            if suspend_kiosk:
+                stop_kiosk(service)
+            elif truthy(settings["KIOSK_LAYOUT_RESUME_ON_KEY_ABSENT"]):
+                if changed:
+                    restart_kiosk(service)
+                elif not service_active(service):
+                    start_kiosk(service)
+            elif changed:
+                restart_kiosk(service)
+
+
+if __name__ == "__main__":
+    main()

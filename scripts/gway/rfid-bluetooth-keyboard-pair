@@ -1,0 +1,211 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import select
+import shutil
+import signal
+import subprocess
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+BASE_DIR = Path("/home/arthe/arthexis")
+LOCK_DIR = BASE_DIR / ".locks"
+LOG_PATH = Path("/home/arthe/.config/rfid-modes/logs/bluetooth-keyboard-pair.log")
+LCD_EVENT_PATH = LOCK_DIR / "lcd-event-0.lck"
+LCD_WIDTH = 16
+PIN_RE = re.compile(r"\b([0-9A-Za-z]{4,6})\b")
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def log(message: str, **fields: object) -> None:
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"timestamp": now_iso(), "message": message, **fields}
+    with LOG_PATH.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def signal_lcd() -> None:
+    pid_path = LOCK_DIR / "lcd.pid"
+    try:
+        pid = int(pid_path.read_text(encoding="utf-8").strip() or "0")
+    except (FileNotFoundError, OSError, ValueError):
+        return
+    if pid > 1:
+        try:
+            os.kill(pid, signal.SIGUSR1)
+        except OSError:
+            pass
+
+
+def lcd_event(line1: str, line2: str, *, seconds: int) -> None:
+    expires = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+    LCD_EVENT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LCD_EVENT_PATH.write_text(
+        f"{line1[:LCD_WIDTH]}\n{line2[:LCD_WIDTH]}\n{expires.isoformat()}\n",
+        encoding="utf-8",
+    )
+    signal_lcd()
+
+
+def bluetoothctl_available() -> bool:
+    return shutil.which("bluetoothctl") is not None
+
+
+def controller_summary() -> str:
+    try:
+        result = subprocess.run(
+            ["bluetoothctl", "show"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return "unavailable"
+    if result.returncode != 0:
+        return "error"
+    for line in result.stdout.splitlines():
+        if line.strip().startswith("Controller "):
+            return line.strip()
+    return "present"
+
+
+def parse_pin(line: str) -> str | None:
+    lowered = line.lower()
+    if not any(word in lowered for word in ("passkey", "pin", "code")):
+        return None
+    match = PIN_RE.search(line)
+    return match.group(1).upper() if match else None
+
+
+def send(process: subprocess.Popen[str], command: str, *, dry_run: bool) -> None:
+    if dry_run:
+        print(f"dry-run bluetoothctl: {command}")
+        return
+    assert process.stdin is not None
+    process.stdin.write(command + "\n")
+    process.stdin.flush()
+
+
+def run_pair_window(args: argparse.Namespace) -> int:
+    if not bluetoothctl_available():
+        print("bluetoothctl is not installed", file=sys.stderr)
+        return 1
+
+    duration = max(5, min(int(args.duration), 120))
+    pin_seconds = max(5, min(int(args.pin_seconds), 120))
+    summary = controller_summary()
+
+    if args.check:
+        print(f"bluetoothctl: {shutil.which('bluetoothctl')}")
+        print(f"controller: {summary}")
+        print(f"duration: {duration}")
+        print(f"pin display seconds: {pin_seconds}")
+        print(f"lcd event path: {LCD_EVENT_PATH}")
+        return 0
+
+    if args.dry_run:
+        print(f"dry-run: controller={summary}")
+        print(f"dry-run: would make host pairable/discoverable for {duration}s")
+        print(f"dry-run: would show detected 4-6 char PIN/passkey on LCD for {pin_seconds}s")
+        for command in (
+            "power on",
+            "agent KeyboardDisplay",
+            "default-agent",
+            "pairable on",
+            "discoverable on",
+            "scan on",
+            "scan off",
+            "discoverable off",
+            "pairable off",
+        ):
+            print(f"dry-run bluetoothctl: {command}")
+        return 0
+
+    log("pair_window_start", duration=duration, controller=summary)
+    lcd_event("BT KEYBOARD", f"PAIR {duration}s", seconds=duration)
+
+    process = subprocess.Popen(
+        ["bluetoothctl"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+    try:
+        for command in (
+            "power on",
+            "agent KeyboardDisplay",
+            "default-agent",
+            "pairable on",
+            "discoverable on",
+            "scan on",
+        ):
+            send(process, command, dry_run=False)
+
+        deadline = time.monotonic() + duration
+        while time.monotonic() < deadline:
+            if process.stdout is None:
+                break
+            ready, _write, _err = select.select([process.stdout], [], [], 0.5)
+            if not ready:
+                continue
+            line = process.stdout.readline()
+            if not line:
+                if process.poll() is not None:
+                    break
+                continue
+            line = line.rstrip()
+            log("bluetoothctl", line=line)
+            pin = parse_pin(line)
+            if pin:
+                lcd_event("BT PIN", pin, seconds=pin_seconds)
+                log("pin_displayed", pin_length=len(pin))
+            lowered = line.lower()
+            if "confirm passkey" in lowered or "(yes/no)" in lowered:
+                send(process, "yes", dry_run=False)
+
+        for command in ("scan off", "discoverable off", "pairable off"):
+            send(process, command, dry_run=False)
+        lcd_event("BT PAIR DONE", "CHECK KEYBD", seconds=15)
+        log("pair_window_complete")
+        return 0
+    finally:
+        try:
+            process.terminate()
+            process.wait(timeout=3)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Open a bounded Bluetooth keyboard pairing window and mirror PIN/passkey prompts to the LCD.",
+    )
+    parser.add_argument("--duration", type=int, default=30, help="pairing window seconds, default 30")
+    parser.add_argument("--pin-seconds", type=int, default=30, help="LCD PIN display seconds, default 30")
+    parser.add_argument("--dry-run", action="store_true", help="print actions without changing Bluetooth or LCD state")
+    parser.add_argument("--check", action="store_true", help="check bluetoothctl/controller availability and exit")
+    return parser
+
+
+def main(argv: list[str]) -> int:
+    args = build_parser().parse_args(argv)
+    return run_pair_window(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -1,0 +1,42 @@
+table inet host_security {
+    set private_ipv4 {
+        type ipv4_addr
+        flags interval
+        elements = { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8 }
+    }
+
+    set private_ipv6 {
+        type ipv6_addr
+        flags interval
+        elements = { ::1/128, fe80::/10, fd00::/8 }
+    }
+
+    set ap_allowed_macs {
+        type ether_addr
+    }
+
+    chain input {
+        type filter hook input priority filter; policy drop;
+
+        ct state invalid drop
+        ct state { established, related } accept
+        iifname "lo" accept
+
+        udp dport 67 accept
+        udp dport 53 accept
+        tcp dport 53 accept
+        tcp dport 80 accept
+
+        iifname "wlan0" ether saddr != @ap_allowed_macs drop
+
+        iifname "wlan0" ip saddr 10.42.0.0/16 ip daddr 10.42.0.1 tcp dport { 21, 21000-21010 } accept
+
+        ip protocol icmp accept
+        ip6 nexthdr ipv6-icmp accept
+
+        ip saddr @private_ipv4 tcp dport { 22, 5900, 8000, 8080, 8888, 8889, 8900, 9000 } accept
+        ip6 saddr @private_ipv6 tcp dport { 22, 5900, 8000, 8080, 8888, 8889, 8900, 9000 } accept
+
+        counter reject with icmpx type admin-prohibited
+    }
+}

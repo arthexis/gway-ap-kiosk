@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+STATE_DIR="${STATE_DIR:-${GWAY_AP_STATE_DIR:-/home/arthe/gway-ap-kiosk/.state/ap_portal}}"
+AUTHORIZED_MACS_PATH="${AUTHORIZED_MACS_PATH:-${STATE_DIR}/authorized_macs.txt}"
+TRUSTED_MACS_PATH="${TRUSTED_MACS_PATH:-${STATE_DIR}/trusted_macs.txt}"
+NFT="${NFT:-$(command -v nft || true)}"
+
+if [[ -z "${NFT}" ]]; then
+  echo "nft command not found" >&2
+  exit 127
+fi
+
+read_authorized_macs() {
+  local paths=()
+  local path
+
+  for path in "${AUTHORIZED_MACS_PATH}" "${TRUSTED_MACS_PATH}"; do
+    if [[ -r "${path}" ]]; then
+      paths+=("${path}")
+    fi
+  done
+
+  if ((${#paths[@]} == 0)); then
+    return 0
+  fi
+
+  awk '
+    BEGIN { IGNORECASE = 1 }
+    {
+      line = $0
+      sub(/#.*/, "", line)
+      gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+      if (line == "") {
+        next
+      }
+      split(line, fields, /[[:space:]]+/)
+      token = tolower(fields[1])
+      if (token ~ /^[0-9a-f][0-9a-f](:[0-9a-f][0-9a-f]){5}$/) {
+        print token
+      }
+    }
+  ' "${paths[@]}" | sort -u
+}
+
+sync_nft_set() {
+  local table="$1"
+  local set_name="$2"
+  local elements=""
+  local rules
+
+  if ! "${NFT}" list set inet "${table}" "${set_name}" >/dev/null 2>&1; then
+    echo "skipping missing nft set inet ${table} ${set_name}" >&2
+    return 2
+  fi
+
+  rules="flush set inet ${table} ${set_name}"$'\n'
+  if ((${#AUTHORIZED_MACS[@]} > 0)); then
+    elements="$(printf '%s, ' "${AUTHORIZED_MACS[@]}")"
+    elements="${elements%, }"
+    rules+="add element inet ${table} ${set_name} { ${elements} }"$'\n'
+  fi
+
+  printf '%s' "${rules}" | "${NFT}" -f -
+  echo "synced ${#AUTHORIZED_MACS[@]} MAC(s) into inet ${table} ${set_name}"
+  return 0
+}
+
+main() {
+  local skipped=0
+  local updated=0
+  local failures=0
+  local rc=0
+
+  mapfile -t AUTHORIZED_MACS < <(read_authorized_macs)
+
+  sync_nft_set host_security ap_allowed_macs || {
+    rc=$?
+    if [[ "${rc}" == "2" ]]; then
+      skipped=$((skipped + 1))
+    else
+      failures=$((failures + 1))
+    fi
+  }
+  if [[ "${rc}" == "0" ]]; then
+    updated=$((updated + 1))
+  fi
+
+  rc=0
+  sync_nft_set arthexis_ap_portal authorized_macs || {
+    rc=$?
+    if [[ "${rc}" == "2" ]]; then
+      skipped=$((skipped + 1))
+    else
+      failures=$((failures + 1))
+    fi
+  }
+  if [[ "${rc}" == "0" ]]; then
+    updated=$((updated + 1))
+  fi
+
+  if ((failures > 0)); then
+    exit 1
+  fi
+  if ((updated == 0)); then
+    echo "no known AP authorization nft sets were available" >&2
+    exit 1
+  fi
+  if ((skipped > 0)); then
+    exit 0
+  fi
+  return 0
+}
+
+main "$@"

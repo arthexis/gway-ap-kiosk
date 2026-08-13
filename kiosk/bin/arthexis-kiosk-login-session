@@ -1,0 +1,230 @@
+#!/home/arthe/arthexis/.venv/bin/python
+from __future__ import annotations
+
+import argparse
+import os
+import sqlite3
+import sys
+import time
+from pathlib import Path
+
+
+CHROME_EPOCH_OFFSET_MICROSECONDS = 11644473600000000
+DEFAULT_PROJECT_DIR = Path("/home/arthe/arthexis")
+DEFAULT_PROFILE_DIRS = (
+    Path("/var/lib/arthexis-hdmi-kiosk/chromium-profile"),
+    Path("/var/lib/arthexis-vnc-kiosk/chromium-profile"),
+)
+DEFAULT_USERNAME = "kiosk"
+DEFAULT_BACKEND = "apps.users.backends.PasswordOrOTPBackend"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Bind a kiosk Chromium profile to a locked-down Arthexis user."
+    )
+    parser.add_argument("--project-dir", type=Path, default=DEFAULT_PROJECT_DIR)
+    parser.add_argument("--username", default=DEFAULT_USERNAME)
+    parser.add_argument("--email", default="kiosk@localhost.invalid")
+    parser.add_argument(
+        "--profile-dir",
+        type=Path,
+        action="append",
+        default=[],
+        help="Chromium profile directory to bind; defaults to HDMI and VNC kiosk profiles.",
+    )
+    parser.add_argument("--host", action="append", default=[])
+    parser.add_argument("--port", type=int, default=8888)
+    parser.add_argument("--days", type=int, default=365)
+    parser.add_argument("--backend", default=DEFAULT_BACKEND)
+    return parser.parse_args()
+
+
+def setup_django(project_dir: Path) -> None:
+    sys.path.insert(0, str(project_dir))
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
+    os.chdir(project_dir)
+
+    import django
+
+    django.setup()
+
+
+def ensure_kiosk_user(username: str, email: str):
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+    user, created = User.all_objects.get_or_create(
+        username=username,
+        defaults={
+            "email": email,
+            "first_name": "Kiosk",
+            "is_active": True,
+            "is_staff": False,
+            "is_superuser": False,
+            "allow_local_network_passwordless_login": False,
+        },
+    )
+
+    updates: list[str] = []
+    desired = {
+        "email": email,
+        "first_name": "Kiosk",
+        "is_active": True,
+        "is_staff": False,
+        "is_superuser": False,
+        "allow_local_network_passwordless_login": False,
+        "require_2fa": False,
+        "force_password_change": False,
+    }
+    for field, value in desired.items():
+        if hasattr(user, field) and getattr(user, field) != value:
+            setattr(user, field, value)
+            updates.append(field)
+
+    if user.has_usable_password() or created:
+        user.set_unusable_password()
+        updates.append("password")
+
+    if updates:
+        user.save(update_fields=sorted(set(updates)))
+    return user
+
+
+def create_session(user, *, backend: str, seconds: int) -> str:
+    from django.conf import settings
+    from django.contrib.auth import BACKEND_SESSION_KEY, HASH_SESSION_KEY, SESSION_KEY
+    from importlib import import_module
+
+    session_engine = import_module(settings.SESSION_ENGINE)
+    session = session_engine.SessionStore()
+    session[SESSION_KEY] = str(user.pk)
+    session[BACKEND_SESSION_KEY] = backend
+    session[HASH_SESSION_KEY] = user.get_session_auth_hash()
+    session.set_expiry(seconds)
+    session.save()
+    return session.session_key
+
+
+def chrome_timestamp(seconds_since_epoch: float) -> int:
+    return int(seconds_since_epoch * 1_000_000) + CHROME_EPOCH_OFFSET_MICROSECONDS
+
+
+def ensure_cookie_schema(db_path: Path) -> None:
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS cookies(
+                creation_utc INTEGER NOT NULL,
+                host_key TEXT NOT NULL,
+                top_frame_site_key TEXT NOT NULL,
+                name TEXT NOT NULL,
+                value TEXT NOT NULL,
+                encrypted_value BLOB NOT NULL,
+                path TEXT NOT NULL,
+                expires_utc INTEGER NOT NULL,
+                is_secure INTEGER NOT NULL,
+                is_httponly INTEGER NOT NULL,
+                last_access_utc INTEGER NOT NULL,
+                has_expires INTEGER NOT NULL,
+                is_persistent INTEGER NOT NULL,
+                priority INTEGER NOT NULL,
+                samesite INTEGER NOT NULL,
+                source_scheme INTEGER NOT NULL,
+                source_port INTEGER NOT NULL,
+                last_update_utc INTEGER NOT NULL,
+                source_type INTEGER NOT NULL,
+                has_cross_site_ancestor INTEGER NOT NULL
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS cookies_unique_index
+            ON cookies(host_key, top_frame_site_key, name, path)
+            """
+        )
+
+
+def write_session_cookie(
+    profile_dir: Path,
+    *,
+    hosts: list[str],
+    port: int,
+    session_key: str,
+    expires_at: float,
+) -> None:
+    db_path = profile_dir / "Default" / "Cookies"
+    ensure_cookie_schema(db_path)
+    now = chrome_timestamp(time.time())
+    expires = chrome_timestamp(expires_at)
+    with sqlite3.connect(db_path) as connection:
+        for host in hosts:
+            connection.execute(
+                """
+                DELETE FROM cookies
+                WHERE host_key = ? AND name = ? AND path = ?
+                """,
+                (host, "sessionid", "/"),
+            )
+            connection.execute(
+                """
+                INSERT INTO cookies(
+                    creation_utc,
+                    host_key,
+                    top_frame_site_key,
+                    name,
+                    value,
+                    encrypted_value,
+                    path,
+                    expires_utc,
+                    is_secure,
+                    is_httponly,
+                    last_access_utc,
+                    has_expires,
+                    is_persistent,
+                    priority,
+                    samesite,
+                    source_scheme,
+                    source_port,
+                    last_update_utc,
+                    source_type,
+                    has_cross_site_ancestor
+                )
+                VALUES (?, ?, '', 'sessionid', ?, X'', '/', ?, 0, 1, ?, 1, 1, 1, 1, 1, ?, ?, 1, 1)
+                """,
+                (now, host, session_key, expires, now, port, now),
+            )
+
+
+def main() -> int:
+    args = parse_args()
+    if args.days <= 0:
+        raise SystemExit("--days must be positive")
+    setup_django(args.project_dir)
+    user = ensure_kiosk_user(args.username, args.email)
+    seconds = args.days * 24 * 60 * 60
+    session_key = create_session(user, backend=args.backend, seconds=seconds)
+    profiles = args.profile_dir or list(DEFAULT_PROFILE_DIRS)
+    hosts = args.host or ["127.0.0.1", "localhost"]
+    expires_at = time.time() + seconds
+    for profile_dir in profiles:
+        write_session_cookie(
+            profile_dir,
+            hosts=hosts,
+            port=args.port,
+            session_key=session_key,
+            expires_at=expires_at,
+        )
+        print(f"profile={profile_dir}")
+    print(f"username={user.username}")
+    print(f"user_id={user.pk}")
+    print(f"session_days={args.days}")
+    print("password_usable=no")
+    print("staff=no")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

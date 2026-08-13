@@ -1,0 +1,29 @@
+.TH RFID-RECORD-30S 1 "2026-07-28" "GWAY local tools" "User Commands"
+.SH NAME
+rfid-record-30s \- record or play a bounded Jabra clip for an RFID card
+.SH SYNOPSIS
+.B rfid-record-30s
+.RI [ options ]
+.SH DESCRIPTION
+Records a bounded Jabra microphone clip for the current or provided RFID card,
+trims silence, archives a WAV file plus metadata, and can play the latest clip
+for that card. Preserved clips are local recording archive data.
+.SH OPTIONS
+.TP
+.BI --action " record|play"
+Record a new clip or play the latest stored clip.
+.TP
+.BI --card " CARD"
+Card ID. Defaults to RFID mode environment or latest scan.
+.TP
+.BI --seconds " SECONDS"
+Recording length. The default is 30.
+.TP
+.BI --archive-dir " DIR"
+Persistent archive root.
+.TP
+.B --dry-run
+Show intended playback without playing audio when supported.
+.SH SEE ALSO
+.BR rfid-voice-memo (1),
+.BR jabra-recorded-time (1)
