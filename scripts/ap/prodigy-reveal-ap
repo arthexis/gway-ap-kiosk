@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# RFID_MODE_RESET_NAVIGATION_ON_EXIT=1
+
+password_tool="${PRODIGY_AP_PASSWORD_TOOL:-/usr/local/sbin/prodigy-ap-password}"
+nmcli_tool="${PRODIGY_AP_NMCLI_TOOL:-/usr/local/bin/prodigy-nmcli}"
+lcd_tool="${PRODIGY_AP_LCD_TOOL:-/home/arthe/.local/bin/prodigy-password-lcd-60s}"
+profile="${PRODIGY_AP_PROFILE:-PRODIGY}"
+dry_run=0
+
+usage() {
+  cat <<'USAGE'
+Usage: prodigy-reveal-ap [--dry-run]
+
+Rotate the PRODIGY AP password, reapply the NetworkManager AP profile, then
+show the saved password on the local LCD using prodigy-password-lcd-60s.
+USAGE
+}
+
+die() {
+  printf 'prodigy-reveal-ap: %s\n' "$*" >&2
+  exit 1
+}
+
+while (($#)); do
+  case "$1" in
+    --dry-run)
+      dry_run=1
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown argument: $1"
+      ;;
+  esac
+  shift
+done
+
+[[ -x "$password_tool" ]] || die "password tool is not executable: $password_tool"
+[[ -x "$nmcli_tool" ]] || die "PRODIGY nmcli wrapper is not executable: $nmcli_tool"
+[[ -x "$lcd_tool" ]] || die "LCD helper is not executable: $lcd_tool"
+
+if ((dry_run)); then
+  sudo -n -l "$password_tool" >/dev/null
+  sudo -n -l "$nmcli_tool" >/dev/null
+  "$lcd_tool" --dry-run >/dev/null
+  printf '{"ok":true,"dry_run":true,"profile":"%s","action":"rotate,reapply,show_lcd"}\n' "$profile"
+  exit 0
+fi
+
+sudo -n "$password_tool" rotate >/dev/null
+sudo -n "$nmcli_tool" connection up "$profile" >/dev/null
+"$lcd_tool" >/dev/null
+printf '{"ok":true,"profile":"%s","action":"rotate,reapply,show_lcd"}\n' "$profile"

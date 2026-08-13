@@ -11,7 +11,8 @@ database/API that a gateway talks to, but the local adapter logic belongs here.
 
 - `scripts/ap_portal_server.py` and `config/data/ap_portal/`: captive/AP portal
   source.
-- `scripts/ap/`: AP password rotation and nftables authorization helpers.
+- `scripts/ap/`: AP password rotation, LCD reveal, NetworkManager reapply, and
+  nftables authorization helpers.
 - `scripts/gway/rfid*`: host-local RFID publisher, mode runner, registration,
   and action helpers.
 - `config/systemd/`: redacted systemd units for AP, RFID, and wifi-role
