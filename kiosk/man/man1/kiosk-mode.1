@@ -3,7 +3,7 @@
 kiosk-mode \- enable or disable the Arthexis HDMI kiosk with the bastion key
 .SH SYNOPSIS
 .B kiosk-mode
-[\fBon\fR|\fBoff\fR|\fBstatus\fR]
+[\fBon\fR|\fBoff\fR|\fBstatus\fR|\fBfield on\fR|\fBfield off\fR|\fBfield status\fR]
 .SH DESCRIPTION
 .B kiosk-mode
 controls the host-local Arthexis HDMI kiosk manual override. The command uses
@@ -22,10 +22,24 @@ verified, disabling is refused and kiosk mode remains mandatory.
 .B kiosk-mode status
 prints the verifier state, manual state, kiosk service state, and state-file
 path.
+.PP
+.B kiosk-mode field on
+arms the field console only while the bastion key is verified. It requires
+.B KIOSK_FIELD_VIEW_ENABLED=1
+in the kiosk environment. The field console remains hidden until the local
+kiosk observes both the configured Ethernet carrier and a live OCPP websocket.
+.PP
+.B kiosk-mode field off
+removes the temporary field-console arm state. The kiosk immediately removes
+the Arthexis field view on a carrier drop, websocket disconnect, or local
+probe failure even while field mode remains armed.
 .SH FILES
 .TP
 .I /run/user/1000/arthexis-hdmi-kiosk/manual-enabled
 Temporary manual kiosk state file.
+.TP
+.I /run/user/1000/arthexis-hdmi-kiosk/field-view-enabled
+Temporary field-console arm state file.
 .TP
 .I /etc/default/arthexis-hdmi-kiosk
 HDMI kiosk session environment.

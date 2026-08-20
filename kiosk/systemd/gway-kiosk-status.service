@@ -8,6 +8,7 @@ Type=simple
 User=arthe
 Group=arthe
 Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/default/arthexis-hdmi-kiosk
 ExecStart=/home/arthe/.local/bin/gway-kiosk-status --host 127.0.0.1 --port 8899
 Restart=on-failure
 RestartSec=2

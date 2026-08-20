@@ -19,6 +19,31 @@ This repository snapshots the kiosk work installed on this host:
 
 The deployed status page currently refreshes every 30 seconds and includes local TODO status. The email watcher is intentionally outside this repository except where `gway-kiosk-status` reports its timer state.
 
+## Live charger field view
+
+The optional field view is fail-closed. It can display the local Arthexis OCPP
+dashboard only after all of these are true: `KIOSK_FIELD_VIEW_ENABLED=1`, an
+operator arms it with `kiosk-mode field on` while the bastion key is present,
+the configured Ethernet interface has carrier, and Arthexis reports a live
+OCPP websocket. The iframe is removed again within the configured three-second
+poll interval when any condition fails.
+
+Set `KIOSK_FIELD_VIEW_CHARGER_IDS` to a comma-separated field-test allowlist
+when only selected chargers should enable the view. The kiosk accepts only
+loopback HTTP URLs for both the liveness contract and the embedded view.
+
+To prepare a field test, set `KIOSK_FIELD_VIEW_ENABLED=1` in
+`/etc/default/arthexis-hdmi-kiosk`, then reload the status service and arm the
+temporary view after the charger is connected:
+
+```bash
+sudo systemctl restart gway-kiosk-status.service
+kiosk-mode field on
+```
+
+Use `kiosk-mode field off` to remove the view immediately. No persistent
+configuration is changed by either operator command.
+
 ## Install
 
 Review `defaults/*.example` and install host-local secrets separately before using a fresh node. The repository does not include the VNC password or RFID auto-display token.

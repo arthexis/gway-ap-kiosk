@@ -26,5 +26,11 @@ KIOSK_RFID_AUTO_DISPLAY=1
 KIOSK_RFID_AUTO_DISPLAY_TOKEN_FILE=/var/lib/arthexis-hdmi-kiosk/rfid-auto-display.token
 KIOSK_BASTION_CHECK=/usr/local/libexec/bastion-key-present
 KIOSK_MANUAL_STATE_FILE=/run/user/1000/arthexis-hdmi-kiosk/manual-enabled
+KIOSK_FIELD_VIEW_ENABLED=0
+KIOSK_FIELD_VIEW_STATE_FILE=/run/user/1000/arthexis-hdmi-kiosk/field-view-enabled
+KIOSK_FIELD_VIEW_LIVE_CONNECTION_URL='http://127.0.0.1:8888/ocpp/kiosk/live-connection/'
+KIOSK_FIELD_VIEW_URL='http://127.0.0.1:8888/ocpp/cpms/dashboard/'
+KIOSK_FIELD_VIEW_REQUIRED_INTERFACE=eth0
+KIOSK_FIELD_VIEW_CHARGER_IDS=
+KIOSK_FIELD_VIEW_POLL_SECONDS=3
 KIOSK_HIDE_WF_PANEL=1
-

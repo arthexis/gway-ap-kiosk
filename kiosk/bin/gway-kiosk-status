@@ -22,6 +22,7 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 from urllib.error import URLError
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 
@@ -39,6 +40,14 @@ DEFAULT_OS_RELEASE_FILE = Path("/etc/os-release")
 DEFAULT_UPTIME_FILE = Path("/proc/uptime")
 DEFAULT_DISK_PATH = Path("/home/arthe")
 DEFAULT_PORTAL_HEALTH_URL = "http://127.0.0.1:9080/health"
+DEFAULT_FIELD_VIEW_LIVE_CONNECTION_URL = (
+    "http://127.0.0.1:8888/ocpp/kiosk/live-connection/"
+)
+DEFAULT_FIELD_VIEW_URL = "http://127.0.0.1:8888/ocpp/cpms/dashboard/"
+DEFAULT_FIELD_VIEW_STATE_FILE = Path(
+    "/run/user/1000/arthexis-hdmi-kiosk/field-view-enabled"
+)
+DEFAULT_FIELD_VIEW_REQUIRED_INTERFACE = "eth0"
 DEFAULT_STATUS_SERVICES = (
     "gway-kiosk-status.service",
     "arthexis.service",
@@ -47,6 +56,7 @@ DEFAULT_STATUS_SERVICES = (
     "gway-tecnologia-mail-watch.timer",
 )
 DEFAULT_REFRESH_SECONDS = 30
+DEFAULT_FIELD_VIEW_POLL_SECONDS = 3
 DEFAULT_TODO_LIMIT = 5
 DEFAULT_WORK_ACTIVE_MAX_AGE_MINUTES = 360
 TAKEOVER_BODY_LIMIT = 32000
@@ -270,6 +280,115 @@ def portal_health() -> dict[str, object]:
         "label": "AP portal",
         "state": str(status_code),
     }
+
+
+def loopback_http_url(value: str) -> str:
+    """Return a safe local HTTP URL, rejecting arbitrary kiosk targets."""
+
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return ""
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
+        or parsed.username
+        or parsed.password
+    ):
+        return ""
+    return urlunsplit(parsed)
+
+
+def csv_values(value: str) -> list[str]:
+    """Return non-empty, trimmed values from a comma-separated setting."""
+
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def interface_has_carrier(interface: str) -> bool:
+    """Return whether the configured local Ethernet interface has carrier."""
+
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", interface):
+        return False
+    try:
+        carrier_file = Path("/sys/class/net") / interface / "carrier"
+        return carrier_file.read_text().strip() == "1"
+    except OSError:
+        return False
+
+
+def field_view_context() -> dict[str, object]:
+    """Return whether an armed field kiosk may show the suite charger view."""
+
+    enabled = truthy(os.environ.get("KIOSK_FIELD_VIEW_ENABLED"))
+    state_file = env_path("KIOSK_FIELD_VIEW_STATE_FILE", DEFAULT_FIELD_VIEW_STATE_FILE)
+    required_interface = os.environ.get(
+        "KIOSK_FIELD_VIEW_REQUIRED_INTERFACE", DEFAULT_FIELD_VIEW_REQUIRED_INTERFACE
+    ).strip()
+    view_url = loopback_http_url(
+        os.environ.get("KIOSK_FIELD_VIEW_URL", DEFAULT_FIELD_VIEW_URL).strip()
+    )
+    context: dict[str, object] = {
+        "enabled": enabled,
+        "armed": state_file.is_file(),
+        "available": False,
+        "reason": "disabled",
+        "required_interface": required_interface,
+        "carrier": None,
+        "charger_count": 0,
+        "view_url": view_url,
+    }
+    if not enabled:
+        return context
+    if not context["armed"]:
+        context["reason"] = "not_armed"
+        return context
+    if not view_url:
+        context["reason"] = "invalid_view_url"
+        return context
+    if required_interface:
+        carrier = interface_has_carrier(required_interface)
+        context["carrier"] = carrier
+        if not carrier:
+            context["reason"] = "no_interface_carrier"
+            return context
+
+    live_url = loopback_http_url(
+        os.environ.get(
+            "KIOSK_FIELD_VIEW_LIVE_CONNECTION_URL",
+            DEFAULT_FIELD_VIEW_LIVE_CONNECTION_URL,
+        ).strip()
+    )
+    if not live_url:
+        context["reason"] = "invalid_live_connection_url"
+        return context
+    charger_ids = csv_values(os.environ.get("KIOSK_FIELD_VIEW_CHARGER_IDS", ""))
+    parsed = urlsplit(live_url)
+    query = parse_qsl(parsed.query, keep_blank_values=True)
+    query.extend(("charger_id", charger_id) for charger_id in charger_ids)
+    live_url = urlunsplit(parsed._replace(query=urlencode(query, doseq=True)))
+    try:
+        with urlopen(live_url, timeout=0.75) as response:  # noqa: S310 - validated loopback URL.
+            if not 200 <= response.status < 300:
+                context["reason"] = "live_connection_unavailable"
+                return context
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, TimeoutError, URLError, ValueError, json.JSONDecodeError):
+        context["reason"] = "live_connection_unavailable"
+        return context
+    if not isinstance(payload, dict) or not payload.get("connected"):
+        context["reason"] = "no_live_ocpp_connection"
+        return context
+    try:
+        context["charger_count"] = max(0, int(payload.get("charger_count") or 0))
+    except (TypeError, ValueError):
+        context["charger_count"] = 0
+    if not context["charger_count"]:
+        context["reason"] = "no_live_ocpp_connection"
+        return context
+    context["available"] = True
+    context["reason"] = "live_ocpp_connection"
+    return context
 
 
 def ap_context(client_ip: str) -> dict[str, object]:
@@ -757,6 +876,7 @@ def fingerprint(payload: dict[str, object]) -> str:
             if item["label"] != "CPU Temp"
         ],
         "kiosk_takeover": payload["kiosk_takeover"],
+        "field_view": payload["field_view"],
         "services": [
             (service["name"], service["state"]) for service in payload["services"]
         ],
@@ -781,6 +901,7 @@ def build_payload(client_ip: str = "127.0.0.1") -> dict[str, object]:
         "warnings": warnings_context(),
         "todo": todo_context(),
         "kiosk_takeover": kiosk_takeover_context(),
+        "field_view": field_view_context(),
     }
     payload["fingerprint"] = fingerprint(payload)
     return payload
@@ -869,6 +990,7 @@ def render_html(payload: dict[str, object]) -> str:
     todo = payload["todo"]
     work_status = todo["work_status"]
     takeover = payload["kiosk_takeover"]
+    field_view = payload["field_view"]
     takeover_classes = "kiosk-takeover"
     if takeover.get("active"):
         takeover_classes += f" is-active is-{h(takeover.get('status') or 'running')}"
@@ -918,8 +1040,10 @@ def render_html(payload: dict[str, object]) -> str:
   class="kiosk-status"
   data-kiosk-status
   data-status-url="/kiosk/status/data/"
+  data-field-view-url="/kiosk/status/field-view/"
   data-fingerprint="{h(payload["fingerprint"])}"
   data-refresh-seconds="{h(payload["refresh_seconds"])}"
+  data-field-view-poll-seconds="{h(env_int("KIOSK_FIELD_VIEW_POLL_SECONDS", DEFAULT_FIELD_VIEW_POLL_SECONDS, minimum=1, maximum=30))}"
 >
   <section
     class="{takeover_classes}"
@@ -937,6 +1061,22 @@ def render_html(payload: dict[str, object]) -> str:
       <div class="kiosk-takeover__progress" data-kiosk-takeover-progress><span></span></div>
       <pre data-kiosk-takeover-body>{h(takeover.get("body") or "")}</pre>
     </div>
+  </section>
+  <section
+    class="kiosk-field-view{' is-active' if field_view.get('available') else ''}"
+    data-kiosk-field-view
+    aria-hidden="{'false' if field_view.get('available') else 'true'}"
+  >
+    <div class="kiosk-field-view__header">
+      <span>Field charger console</span>
+      <strong data-kiosk-field-view-status>{h(field_view.get("reason") or "")}</strong>
+    </div>
+    <iframe
+      data-kiosk-field-view-frame
+      title="Arthexis field charger console"
+      referrerpolicy="no-referrer"
+      src="{h(field_view.get("view_url") or "") if field_view.get("available") else ""}"
+    ></iframe>
   </section>
 
   <section class="kiosk-status__grid" aria-label="Kiosk status">
@@ -1409,6 +1549,44 @@ body {
   display: flex;
 }
 
+.kiosk-field-view {
+  background: var(--kiosk-bg);
+  display: none;
+  inset: 0;
+  position: absolute;
+  z-index: 30;
+}
+
+.kiosk-field-view.is-active {
+  display: flex;
+  flex-direction: column;
+}
+
+.kiosk-field-view__header {
+  align-items: center;
+  background: #102c25;
+  color: var(--kiosk-text);
+  display: flex;
+  font-size: clamp(14px, 2vh, 20px);
+  justify-content: space-between;
+  letter-spacing: 0.04em;
+  min-height: 42px;
+  padding: 8px 16px;
+  text-transform: uppercase;
+}
+
+.kiosk-field-view__header strong {
+  color: var(--kiosk-ok);
+}
+
+.kiosk-field-view iframe {
+  background: var(--kiosk-bg);
+  border: 0;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
 .kiosk-takeover__shell {
   background: #11191e;
   border: 1px solid var(--kiosk-line);
@@ -1572,6 +1750,9 @@ JS = r"""
   const statusUrl = root.dataset.statusUrl || '/kiosk/status/data/';
   const refreshSeconds = Number.parseInt(root.dataset.refreshSeconds || '10', 10);
   const refreshMs = Math.max(2, refreshSeconds || 10) * 1000;
+  const fieldViewUrl = root.dataset.fieldViewUrl || '/kiosk/status/field-view/';
+  const fieldViewPollSeconds = Number.parseInt(root.dataset.fieldViewPollSeconds || '3', 10);
+  const fieldViewPollMs = Math.max(1, fieldViewPollSeconds || 3) * 1000;
   const takeover = root.querySelector('[data-kiosk-takeover]');
   const takeoverKind = root.querySelector('[data-kiosk-takeover-kind]');
   const takeoverStatus = root.querySelector('[data-kiosk-takeover-status]');
@@ -1579,6 +1760,9 @@ JS = r"""
   const takeoverSummary = root.querySelector('[data-kiosk-takeover-summary]');
   const takeoverProgress = root.querySelector('[data-kiosk-takeover-progress]');
   const takeoverBody = root.querySelector('[data-kiosk-takeover-body]');
+  const fieldView = root.querySelector('[data-kiosk-field-view]');
+  const fieldViewStatus = root.querySelector('[data-kiosk-field-view-status]');
+  const fieldViewFrame = root.querySelector('[data-kiosk-field-view-frame]');
 
   function setText(node, value) {
     if (node) {
@@ -1614,6 +1798,45 @@ JS = r"""
     return active;
   }
 
+  function renderFieldView(payload) {
+    if (!fieldView) {
+      return;
+    }
+    const active = Boolean(payload && payload.available && payload.view_url);
+    fieldView.classList.toggle('is-active', active);
+    fieldView.setAttribute('aria-hidden', active ? 'false' : 'true');
+    setText(fieldViewStatus, active ? payload.reason || 'live_ocpp_connection' : '');
+    if (!fieldViewFrame) {
+      return;
+    }
+    if (!active) {
+      fieldViewFrame.removeAttribute('src');
+      return;
+    }
+    if (fieldViewFrame.getAttribute('src') !== payload.view_url) {
+      fieldViewFrame.setAttribute('src', payload.view_url);
+    }
+  }
+
+  async function refreshFieldView() {
+    if (document.hidden) {
+      return;
+    }
+    try {
+      const response = await fetch(fieldViewUrl, {
+        cache: 'no-store',
+        headers: { Accept: 'application/json' },
+      });
+      if (!response.ok) {
+        renderFieldView(null);
+        return;
+      }
+      renderFieldView(await response.json());
+    } catch (_error) {
+      renderFieldView(null);
+    }
+  }
+
   async function refreshStatus() {
     if (document.hidden) {
       return;
@@ -1641,9 +1864,12 @@ JS = r"""
   }
 
   window.setInterval(refreshStatus, refreshMs);
+  window.setInterval(refreshFieldView, fieldViewPollMs);
+  refreshFieldView();
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {
       refreshStatus();
+      refreshFieldView();
     }
   });
 })();
@@ -1672,6 +1898,10 @@ class KioskStatusHandler(http.server.BaseHTTPRequestHandler):
         if self.path.split("?", 1)[0] in {"/data", "/kiosk/status/data/"}:
             payload = build_payload(self._client_ip())
             body = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
+            self._send(200, "application/json; charset=utf-8", body)
+            return
+        if self.path.split("?", 1)[0] in {"/field-view", "/kiosk/status/field-view/"}:
+            body = json.dumps(field_view_context(), sort_keys=True).encode("utf-8")
             self._send(200, "application/json; charset=utf-8", body)
             return
         if self.path.split("?", 1)[0] in {"/", "/kiosk/", "/kiosk/status/"}:

@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 BASTION_CHECK="${KIOSK_BASTION_CHECK:-/usr/local/libexec/bastion-key-present}"
 MANUAL_STATE_FILE="${KIOSK_MANUAL_STATE_FILE:-/run/user/1000/arthexis-hdmi-kiosk/manual-enabled}"
+FIELD_VIEW_ENABLED="${KIOSK_FIELD_VIEW_ENABLED:-0}"
+FIELD_VIEW_STATE_FILE="${KIOSK_FIELD_VIEW_STATE_FILE:-/run/user/1000/arthexis-hdmi-kiosk/field-view-enabled}"
 LAYOUT_SERVICE="${KIOSK_LAYOUT_SERVICE:-arthexis-hdmi-kiosk-layout.service}"
 KIOSK_SERVICE="${KIOSK_SERVICE:-arthexis-hdmi-kiosk.service}"
 
@@ -25,18 +27,27 @@ run_systemctl() {
   fi
 }
 
-write_manual_state() {
+write_state() {
+  local state_file="$1"
   local state_dir tmp_file
-  state_dir="$(dirname "${MANUAL_STATE_FILE}")"
+  state_dir="$(dirname "${state_file}")"
   mkdir -p "${state_dir}"
   chmod 0700 "${state_dir}"
-  tmp_file="${MANUAL_STATE_FILE}.$$"
+  tmp_file="${state_file}.$$"
   {
     printf 'enabled_at=%s\n' "$(date --iso-8601=seconds)"
     printf 'enabled_by=%s\n' "$(id -un)"
   } > "${tmp_file}"
   chmod 0600 "${tmp_file}"
-  mv -f "${tmp_file}" "${MANUAL_STATE_FILE}"
+  mv -f "${tmp_file}" "${state_file}"
+}
+
+write_manual_state() {
+  write_state "${MANUAL_STATE_FILE}"
+}
+
+field_view_configured() {
+  [[ "${FIELD_VIEW_ENABLED,,}" =~ ^(1|yes|true|on)$ ]]
 }
 
 enable_kiosk() {
@@ -68,6 +79,7 @@ disable_kiosk() {
 status_kiosk() {
   local key_state="absent"
   local manual_state="off"
+  local field_view_state="off"
   local service_state
 
   if key_present; then
@@ -76,20 +88,57 @@ status_kiosk() {
   if [[ -e "${MANUAL_STATE_FILE}" ]]; then
     manual_state="on"
   fi
+  if [[ -e "${FIELD_VIEW_STATE_FILE}" ]]; then
+    field_view_state="armed"
+  fi
   service_state="$(systemctl is-active "${KIOSK_SERVICE}" 2>/dev/null || true)"
   printf 'bastion_key=%s\n' "${key_state}"
   printf 'manual_kiosk=%s\n' "${manual_state}"
   printf 'service=%s\n' "${service_state:-unknown}"
   printf 'manual_state_file=%s\n' "${MANUAL_STATE_FILE}"
+  printf 'field_view_configured=%s\n' "$(field_view_configured && echo yes || echo no)"
+  printf 'field_view=%s\n' "${field_view_state}"
+  printf 'field_view_state_file=%s\n' "${FIELD_VIEW_STATE_FILE}"
+}
+
+enable_field_view() {
+  if ! field_view_configured; then
+    echo "Field view is disabled in /etc/default/arthexis-hdmi-kiosk." >&2
+    return 1
+  fi
+  if ! key_present; then
+    echo "Bastion key is not verified; refusing to arm field view." >&2
+    return 1
+  fi
+  write_state "${FIELD_VIEW_STATE_FILE}"
+  notify "Field view armed; it appears only with live charger connection."
+}
+
+disable_field_view() {
+  if ! key_present; then
+    echo "Bastion key is not verified; refusing to disarm field view." >&2
+    return 1
+  fi
+  rm -f "${FIELD_VIEW_STATE_FILE}"
+  notify "Field view disarmed."
+}
+
+field_view_status() {
+  printf 'configured=%s\n' "$(field_view_configured && echo yes || echo no)"
+  printf 'armed=%s\n' "$([[ -e "${FIELD_VIEW_STATE_FILE}" ]] && echo yes || echo no)"
+  printf 'state_file=%s\n' "${FIELD_VIEW_STATE_FILE}"
 }
 
 usage() {
   cat <<'EOF'
-Usage: kiosk-mode [on|off|status]
+Usage: kiosk-mode [on|off|status|field on|field off|field status]
 
 Enable or disable the host-local Arthexis HDMI kiosk when the bastion USB key
 is verified. Disabling is refused while the key is absent so kiosk mode remains
 mandatory.
+
+Field view remains hidden unless it is enabled in the kiosk config, armed with
+the verified key, and a live charger connection is present.
 EOF
 }
 
@@ -103,6 +152,23 @@ case "${command}" in
     ;;
   status)
     status_kiosk
+    ;;
+  field)
+    case "${2:-status}" in
+      on|enable|start)
+        enable_field_view
+        ;;
+      off|disable|stop)
+        disable_field_view
+        ;;
+      status)
+        field_view_status
+        ;;
+      *)
+        usage >&2
+        exit 2
+        ;;
+    esac
     ;;
   -h|--help|help)
     usage
