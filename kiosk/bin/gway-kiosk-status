@@ -21,9 +21,9 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from pathlib import Path
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-from urllib.request import urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from zoneinfo import ZoneInfo
 
 
@@ -35,6 +35,14 @@ DEFAULT_KIOSK_TAKEOVER_FILE = Path("/home/arthe/.local/state/kiosk/takeover.json
 DEFAULT_TODO_FILE = Path("/home/arthe/TODO.txt")
 DEFAULT_WORKGROUP_FILE = Path("/home/arthe/workgroup.txt")
 DEFAULT_LCD_HISTORY_DIR = Path("/home/arthe/arthexis/work")
+DEFAULT_LCD_RUNNER_HISTORY_FILE = Path(
+    "/home/arthe/.local/state/lcd-lockfile-runner/lcd-history.ndjson"
+)
+DEFAULT_LCD_STANDBY_SCRIPT = Path(
+    "/home/arthe/.local/state/lcd-lockfiles/lcd-rotation.script"
+)
+AP_RESET_COMMAND = Path("/home/arthe/gway-ap-kiosk/scripts/ap/prodigy-reveal-ap")
+AP_RESET_LCD_TOOL = Path("/home/arthe/gway-ap-kiosk/scripts/ap/prodigy-password-lcd-60s")
 DEFAULT_CPU_TEMP_FILE = Path("/sys/class/thermal/thermal_zone0/temp")
 DEFAULT_OS_RELEASE_FILE = Path("/etc/os-release")
 DEFAULT_UPTIME_FILE = Path("/proc/uptime")
@@ -44,6 +52,8 @@ DEFAULT_FIELD_VIEW_LIVE_CONNECTION_URL = (
     "http://127.0.0.1:8888/ocpp/kiosk/live-connection/"
 )
 DEFAULT_FIELD_VIEW_URL = "http://127.0.0.1:8888/ocpp/cpms/dashboard/"
+DEFAULT_CONSOLE_URL = "http://127.0.0.1:8888/"
+CONSOLE_PROXY_PREFIX = "/kiosk/console/"
 DEFAULT_FIELD_VIEW_STATE_FILE = Path(
     "/run/user/1000/arthexis-hdmi-kiosk/field-view-enabled"
 )
@@ -52,8 +62,8 @@ DEFAULT_STATUS_SERVICES = (
     "gway-kiosk-status.service",
     "arthexis.service",
     "arthexis-ap-portal.service",
+    "lcd-arthexis.service",
     "rfid-scan-publisher.service",
-    "gway-tecnologia-mail-watch.timer",
 )
 DEFAULT_REFRESH_SECONDS = 30
 DEFAULT_FIELD_VIEW_POLL_SECONDS = 3
@@ -63,6 +73,19 @@ TAKEOVER_BODY_LIMIT = 32000
 TAKEOVER_TEXT_LIMIT = 280
 TAKEOVER_TITLE_LIMIT = 80
 LAYOUT_VERSION = "gway-local-kiosk-todo-v1"
+RESTARTABLE_SERVICES = frozenset({"arthexis.service", "lcd-arthexis.service"})
+SERVICE_RESTART_PATH_PREFIX = "/kiosk/status/services/"
+AP_RESET_PATH = "/kiosk/status/ap/reset/"
+
+
+class NoRedirectHandler(HTTPRedirectHandler):
+    """Return upstream redirects so the browser can follow the proxied path."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, D401
+        return None
+
+
+CONSOLE_OPENER = build_opener(NoRedirectHandler())
 
 
 def env_path(name: str, default: Path) -> Path:
@@ -155,6 +178,18 @@ def format_duration(seconds: float) -> str:
         parts.append(f"{hours}h")
     parts.append(f"{minutes}m")
     return " ".join(parts)
+
+
+def humanize_datetime(value: datetime | str | None) -> str:
+    """Return a compact relative timestamp for the space-constrained kiosk."""
+
+    parsed = parse_datetime(value)
+    if parsed is None:
+        return "Unknown"
+    elapsed = (datetime.now(timezone.utc) - parsed.astimezone(timezone.utc)).total_seconds()
+    if elapsed < 60:
+        return "just now"
+    return f"{format_duration(elapsed)} ago"
 
 
 def format_bytes(value: float) -> str:
@@ -254,6 +289,7 @@ def service_status(name: str) -> dict[str, object]:
         "label": name.removesuffix(".service").removesuffix(".timer"),
         "state": state,
         "ok": state == "active",
+        "restartable": name in RESTARTABLE_SERVICES,
     }
 
 
@@ -262,7 +298,51 @@ def service_statuses() -> list[dict[str, object]]:
     services = [part.strip() for part in configured.split(",") if part.strip()]
     if not services:
         services = list(DEFAULT_STATUS_SERVICES)
+    services.sort(
+        key=lambda name: name.removesuffix(".service").removesuffix(".timer").casefold()
+    )
     return [service_status(service) for service in services]
+
+
+def restart_service(name: str) -> bool:
+    """Restart one explicitly allowlisted system service without a password prompt."""
+
+    if name not in RESTARTABLE_SERVICES:
+        return False
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "systemctl", "restart", name],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
+
+
+def reset_access_point() -> bool:
+    """Run the maintained AP reveal/reset operation without exposing credentials."""
+
+    if not AP_RESET_COMMAND.is_file() or not os.access(AP_RESET_COMMAND, os.X_OK):
+        return False
+    if not AP_RESET_LCD_TOOL.is_file() or not os.access(AP_RESET_LCD_TOOL, os.X_OK):
+        return False
+    environment = os.environ.copy()
+    environment["PRODIGY_AP_LCD_TOOL"] = str(AP_RESET_LCD_TOOL)
+    try:
+        result = subprocess.run(
+            [str(AP_RESET_COMMAND)],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=60,
+            env=environment,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
 
 
 def portal_health() -> dict[str, object]:
@@ -297,6 +377,50 @@ def loopback_http_url(value: str) -> str:
     ):
         return ""
     return urlunsplit(parsed)
+
+
+def console_target_url(request_path: str, query: str = "") -> str:
+    """Map a kiosk console path to the configured local Arthexis UI."""
+
+    base_url = loopback_http_url(
+        os.environ.get("KIOSK_CONSOLE_URL", DEFAULT_CONSOLE_URL).strip()
+    )
+    if not base_url:
+        return ""
+    parsed = urlsplit(base_url)
+    suffix = request_path.removeprefix(CONSOLE_PROXY_PREFIX)
+    target_path = "/" + suffix.lstrip("/")
+    return urlunsplit(parsed._replace(path=target_path, query=query, fragment=""))
+
+
+def rewrite_console_html(body: bytes) -> bytes:
+    """Keep Arthexis links inside the same-origin kiosk console proxy."""
+
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return body
+    text = re.sub(
+        r'(?P<attribute>\s[\w:-]+=["\'])/(?!/|kiosk/console/)(?P<path>[^"\']*)',
+        lambda match: f"{match.group('attribute')}{CONSOLE_PROXY_PREFIX}{match.group('path')}",
+        text,
+    )
+    return text.encode("utf-8")
+
+
+def rewrite_console_css(body: bytes) -> bytes:
+    """Keep root-relative CSS assets behind the same-origin console proxy."""
+
+    try:
+        text = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return body
+    text = re.sub(
+        r"url\((?P<quote>['\"]?)/(?!/|kiosk/console/)(?P<path>[^)]+)\)",
+        lambda match: f"url({match.group('quote')}{CONSOLE_PROXY_PREFIX}{match.group('path')})",
+        text,
+    )
+    return text.encode("utf-8")
 
 
 def csv_values(value: str) -> list[str]:
@@ -406,6 +530,7 @@ def ap_context(client_ip: str) -> dict[str, object]:
         "password_visible": password_visible,
         "updated_at": values.get("UPDATED_AT", ""),
         "updated_at_display": display_datetime(values.get("UPDATED_AT", "")),
+        "updated_at_humanized": humanize_datetime(values.get("UPDATED_AT", "")),
         "interface": values.get("INTERFACE", ""),
         "file_path": str(path),
         "qr_payload": qr_payload,
@@ -609,13 +734,22 @@ def free_disk() -> str:
     return f"{format_bytes(usage.free)} free"
 
 
-def lcd_history_context() -> dict[str, object]:
+def lcd_history_entries() -> list[dict[str, str]]:
     history_dir = env_path("GWAY_KIOSK_LCD_HISTORY_DIR", DEFAULT_LCD_HISTORY_DIR)
     entries: list[dict[str, str]] = []
-    for index in range(3):
-        path = history_dir / f"lcd-history-{index}.txt"
+    paths = [history_dir / f"lcd-history-{index}.txt" for index in range(3)]
+    paths.append(
+        env_path("GWAY_KIOSK_LCD_RUNNER_HISTORY_FILE", DEFAULT_LCD_RUNNER_HISTORY_FILE)
+    )
+    for path in paths:
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            with path.open("rb") as handle:
+                handle.seek(0, os.SEEK_END)
+                start = max(0, handle.tell() - 256 * 1024)
+                handle.seek(start)
+                if start:
+                    handle.readline()
+                lines = handle.read().decode("utf-8", errors="replace").splitlines()[-1000:]
         except OSError:
             continue
         for line in lines:
@@ -631,12 +765,46 @@ def lcd_history_context() -> dict[str, object]:
                 {
                     "time": display_datetime(parsed.get("ts")),
                     "sort_time": str(parsed.get("ts") or ""),
-                    "label": clean_text(parsed.get("label") or "LCD", 40),
-                    "display_text": " || ".join(line for line in (line1, line2) if line),
+                    "line1": clean_text(line1, 160),
+                    "line2": clean_text(line2, 160),
+                    "label": clean_text(str(parsed.get("label") or ""), 40),
                 }
             )
     entries.sort(key=lambda item: item["sort_time"])
-    return {"items": entries[-4:][::-1]}
+    return entries
+
+
+def lcd_standby_context() -> list[dict[str, str]]:
+    """Return the current four-frame standby rotation from the LCD publisher."""
+
+    path = env_path("GWAY_KIOSK_LCD_STANDBY_SCRIPT", DEFAULT_LCD_STANDBY_SCRIPT)
+    frames: list[dict[str, str]] = []
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return frames
+    for line in lines:
+        if not line.strip().startswith("frame "):
+            continue
+        parts = re.findall(r'"([^"]*)"', line)
+        if not parts:
+            continue
+        frames.append(
+            {
+                "line1": clean_text(parts[0], 160),
+                "line2": clean_text(parts[1] if len(parts) > 1 else "", 160),
+            }
+        )
+    return frames[-4:]
+
+
+def lcd_history_context() -> dict[str, object]:
+    entries = lcd_history_entries()
+    latest = [entry for entry in entries if entry.get("label") != "script"]
+    return {
+        "latest": latest[-4:][::-1],
+        "standby": lcd_standby_context(),
+    }
 
 
 def line_mentions_undervoltage(line: str) -> bool:
@@ -941,39 +1109,54 @@ def render_todo_items(todo: dict[str, object]) -> str:
     return "\n".join(rows)
 
 
-def render_lcd_items(lcd_history: dict[str, object]) -> str:
-    items = lcd_history.get("items")
+def render_lcd_items(items: object, *, empty_message: str) -> str:
     if not isinstance(items, list) or not items:
-        return '<p class="kiosk-empty">No LCD history</p>'
+        return f'<p class="kiosk-empty">{h(empty_message)}</p>'
     rows: list[str] = []
     for raw in items:
         item = raw if isinstance(raw, dict) else {}
         rows.append(
             '<div class="kiosk-lcd-history__item">'
-            '<div class="kiosk-lcd-history__meta">'
-            f'<span>{h(item.get("label") or "LCD")}</span>'
-            f'<time>{h(item.get("time") or "-")}</time>'
+            '<div class="kiosk-lcd-history__frame">'
+            f'<span>{h(item.get("line1") or " ")}</span>'
+            f'<span>{h(item.get("line2") or " ")}</span>'
             "</div>"
-            f'<div class="kiosk-lcd-history__frame"><span>{h(item.get("display_text") or " ")}</span></div>'
             "</div>"
         )
     return "\n".join(rows)
 
 
+def render_lcd_history(lcd_history: dict[str, object]) -> str:
+    latest = render_lcd_items(lcd_history.get("latest"), empty_message="No recent messages")
+    standby = render_lcd_items(lcd_history.get("standby"), empty_message="No standby screens")
+    return """
+      <section class="kiosk-lcd-history__column" aria-label="Latest LCD messages">
+        <h3>Latest</h3>
+        {latest}
+      </section>
+      <section class="kiosk-lcd-history__column" aria-label="Standby LCD screens">
+        <h3>Standby</h3>
+        {standby}
+      </section>
+    """.format(latest=latest, standby=standby)
+
+
 def render_services(payload: dict[str, object]) -> str:
-    portal = payload["portal"]
-    rows = [
-        '<div class="kiosk-service {klass}"><span>{label}</span><strong>{state}</strong></div>'.format(
-            klass="is-ok" if portal.get("ok") else "is-alert",
-            label=h(portal.get("label")),
-            state=h(portal.get("state")),
-        )
-    ]
+    rows = []
     for raw in payload["services"]:
         service = raw if isinstance(raw, dict) else {}
+        restartable = bool(service.get("restartable"))
+        restart_button = (
+            '<button class="kiosk-service__restart" type="button" '
+            f'data-kiosk-restart-service="{h(service.get("name"))}">RESTART</button>'
+            if restartable
+            else ""
+        )
         rows.append(
-            '<div class="kiosk-service {klass}"><span>{label}</span><strong>{state}</strong></div>'.format(
-                klass="is-ok" if service.get("ok") else "is-alert",
+            '<div class="kiosk-service {klass}"><span>{label}</span>{restart_button}<strong>{state}</strong></div>'.format(
+                klass=("is-ok" if service.get("ok") else "is-alert")
+                + (" kiosk-service--restartable" if restartable else ""),
+                restart_button=restart_button,
                 label=h(service.get("label")),
                 state=h(service.get("state")),
             )
@@ -1006,9 +1189,9 @@ def render_html(payload: dict[str, object]) -> str:
     command = last_card.get("command") if isinstance(last_card.get("command"), dict) else {}
     card_details.extend(
         [
+            detail("Command", command.get("command", "")),
             detail("Command status", command.get("execution_status", "")),
             detail("Name", command.get("card_name", "")),
-            detail("Command", command.get("command", "")),
             detail("Template", command.get("template", "")),
             detail("Detail", command.get("execution_detail", "")),
             detail("Current mode", mode_state.get("current_card", "")),
@@ -1016,8 +1199,7 @@ def render_html(payload: dict[str, object]) -> str:
         ]
     )
     system_details = [
-        detail("Host", node.get("hostname", "")),
-        detail("Node", node.get("node", "")),
+        detail("Host / Node", node.get("hostname", "") or node.get("node", "")),
         detail("Role", node.get("role", "")),
         detail("Uptime", node.get("uptime", "")),
         detail("OS", node.get("os", "")),
@@ -1041,10 +1223,15 @@ def render_html(payload: dict[str, object]) -> str:
   data-kiosk-status
   data-status-url="/kiosk/status/data/"
   data-field-view-url="/kiosk/status/field-view/"
+  data-console-url="{CONSOLE_PROXY_PREFIX}"
   data-fingerprint="{h(payload["fingerprint"])}"
   data-refresh-seconds="{h(payload["refresh_seconds"])}"
   data-field-view-poll-seconds="{h(env_int("KIOSK_FIELD_VIEW_POLL_SECONDS", DEFAULT_FIELD_VIEW_POLL_SECONDS, minimum=1, maximum=30))}"
 >
+  <nav class="kiosk-tabs" aria-label="Kiosk view">
+    <button class="kiosk-tabs__tab is-active" type="button" role="tab" aria-selected="true" aria-controls="kiosk-view" data-kiosk-tab="kiosk">KIOSK</button>
+    <button class="kiosk-tabs__tab" type="button" role="tab" aria-selected="false" aria-controls="console-view" data-kiosk-tab="console">CONSOLE</button>
+  </nav>
   <section
     class="{takeover_classes}"
     data-kiosk-takeover
@@ -1079,27 +1266,35 @@ def render_html(payload: dict[str, object]) -> str:
     ></iframe>
   </section>
 
+  <div class="kiosk-tab-panels">
+  <section class="kiosk-tab-panel kiosk-tab-panel--kiosk is-active" id="kiosk-view" role="tabpanel" aria-label="Kiosk">
   <section class="kiosk-status__grid" aria-label="Kiosk status">
     <div class="kiosk-status__column kiosk-status__column--ap">
       <article class="kiosk-panel kiosk-panel--ap">
         <div class="kiosk-panel__heading">
           <p>Access</p>
-          <strong>{h(ap.get("interface") or "-")}</strong>
         </div>
-        <div class="kiosk-ap-credentials">
-          <div><span>SSID</span><strong>{h(ap.get("ssid") or "-")}</strong></div>
-          <div><span>Password</span><strong>{h(ap.get("password") or ("Console only" if not ap.get("password_visible") else "-"))}</strong></div>
+        <div class="kiosk-ap-content">
+          <div class="kiosk-ap-copy">
+            <div class="kiosk-ap-credentials">
+              <div><span>SSID</span><strong>{h(ap.get("ssid") or "-")}</strong></div>
+              <div><span>Password</span><strong>{h(ap.get("password") or ("Console only" if not ap.get("password_visible") else "-"))}</strong></div>
+            </div>
+            <div class="kiosk-ap-updated">
+              <span>Updated</span>
+              <strong>{h(ap.get("updated_at_humanized") or "Unknown")}</strong>
+            </div>
+          </div>
+          <div class="kiosk-ap-action">
+            {f'<img class="kiosk-ap-qr" src="{h(ap.get("qr_data_uri"))}" alt="AP Wi-Fi QR code">' if ap.get("qr_data_uri") else ""}
+            <button class="kiosk-ap-reset" type="button" data-kiosk-ap-reset>RESET</button>
+          </div>
         </div>
-        {f'<img class="kiosk-ap-qr" src="{h(ap.get("qr_data_uri"))}" alt="AP Wi-Fi QR code">' if ap.get("qr_data_uri") else ""}
-        <dl class="kiosk-detail-list">
-          <dt>Updated</dt><dd>{h(ap.get("updated_at_display") or "-")}</dd>
-        </dl>
       </article>
 
       <article class="kiosk-panel kiosk-panel--todo">
         <div class="kiosk-panel__heading">
           <p>TODO</p>
-          <strong>{h(work_status.get("label") or "Idle")}</strong>
         </div>
         <div class="kiosk-todo-status {'is-active' if work_status.get('active') else ''}">
           <strong>{h(work_status.get("label") or "Idle")}</strong>
@@ -1115,11 +1310,9 @@ def render_html(payload: dict[str, object]) -> str:
       <article class="kiosk-panel kiosk-panel--card">
         <div class="kiosk-panel__heading">
           <p>Last Card</p>
-          <strong>{h(last_card.get("status") or "idle")}</strong>
         </div>
         <div class="kiosk-last-card">
           <strong>{h(last_card.get("display_label") or "No card seen")}</strong>
-          <span>{h(last_card.get("rfid") or "-")}</span>
         </div>
         <dl class="kiosk-detail-list">{render_detail_list(card_details)}</dl>
       </article>
@@ -1127,9 +1320,8 @@ def render_html(payload: dict[str, object]) -> str:
       <article class="kiosk-panel kiosk-panel--lcd">
         <div class="kiosk-panel__heading">
           <p>LCD History</p>
-          <strong>Last 4</strong>
         </div>
-        <div class="kiosk-lcd-history">{render_lcd_items(payload["lcd_history"])}</div>
+        <div class="kiosk-lcd-history">{render_lcd_history(payload["lcd_history"])}</div>
       </article>
     </div>
 
@@ -1137,7 +1329,6 @@ def render_html(payload: dict[str, object]) -> str:
       <article class="kiosk-panel kiosk-panel--node">
         <div class="kiosk-panel__heading">
           <p>System Info</p>
-          <strong>{h(node.get("header") or "GWAY-001")}</strong>
         </div>
         <dl class="kiosk-detail-list">{render_detail_list(system_details)}</dl>
       </article>
@@ -1145,12 +1336,16 @@ def render_html(payload: dict[str, object]) -> str:
       <article class="kiosk-panel kiosk-panel--status">
         <div class="kiosk-panel__heading">
           <p>Services</p>
-          <strong>{"Online" if payload["portal"].get("ok") else "Check"}</strong>
         </div>
         <div class="kiosk-service-list">{render_services(payload)}</div>
       </article>
     </div>
   </section>
+  </section>
+  <section class="kiosk-tab-panel kiosk-console" id="console-view" role="tabpanel" aria-label="Arthexis console" aria-hidden="true">
+    <iframe data-kiosk-console-frame title="Arthexis console" referrerpolicy="no-referrer"></iframe>
+  </section>
+  </div>
 </main>
 <script>{JS}</script>
 </body>
@@ -1192,7 +1387,7 @@ body {
   --kiosk-gap: clamp(7px, 1vh, 10px);
   --kiosk-pad: clamp(7px, 1vh, 10px);
   --kiosk-panel-pad: clamp(7px, 1vh, 10px);
-  --kiosk-qr-size: clamp(92px, 13vmin, 132px);
+  --kiosk-qr-size: clamp(207px, 29.25vmin, 297px);
   background: var(--kiosk-bg);
   color: var(--kiosk-text);
   height: 100vh;
@@ -1203,6 +1398,52 @@ body {
   padding: var(--kiosk-pad);
   position: relative;
   user-select: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.kiosk-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.4rem;
+  padding: 0 0 var(--kiosk-gap);
+  width: 100%;
+}
+
+.kiosk-tabs__tab {
+  background: var(--kiosk-panel-strong);
+  border: 1px solid var(--kiosk-line);
+  border-radius: 7px;
+  color: var(--kiosk-muted);
+  font: inherit;
+  font-size: clamp(0.78rem, 1.6vh, 0.96rem);
+  font-weight: 800;
+  flex: 1 1 0;
+  letter-spacing: 0.08em;
+  min-height: 2.25rem;
+  padding: 0.35rem 1.1rem;
+  width: 50%;
+}
+
+.kiosk-tabs__tab.is-active {
+  background: #102c25;
+  border-color: var(--kiosk-ok);
+  color: var(--kiosk-text);
+}
+
+.kiosk-tab-panels {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.kiosk-tab-panel {
+  display: none;
+  height: 100%;
+  min-height: 0;
+}
+
+.kiosk-tab-panel.is-active {
+  display: block;
 }
 
 .kiosk-status__grid {
@@ -1212,6 +1453,17 @@ body {
   grid-template-columns: minmax(240px, 0.9fr) minmax(300px, 1.15fr) minmax(240px, 0.95fr);
   height: 100%;
   min-height: 0;
+}
+
+.kiosk-console {
+  background: var(--kiosk-bg);
+}
+
+.kiosk-console iframe {
+  background: #fff;
+  border: 0;
+  height: 100%;
+  width: 100%;
 }
 
 .kiosk-status__column {
@@ -1284,12 +1536,51 @@ body {
 .kiosk-ap-credentials {
   display: grid;
   gap: 0.32rem;
-  margin-bottom: 0.38rem;
+}
+
+.kiosk-ap-content {
+  align-items: start;
+  display: grid;
+  gap: 0.7rem;
+  grid-template-columns: minmax(0, 1fr) var(--kiosk-qr-size);
+}
+
+.kiosk-ap-copy {
+  min-width: 0;
+  width: 100%;
+}
+
+.kiosk-ap-action {
+  display: grid;
+  gap: 0.45rem;
+  justify-items: end;
+  width: var(--kiosk-qr-size);
 }
 
 .kiosk-ap-credentials div {
   border-bottom: 1px solid var(--kiosk-line);
   padding: 0.26rem 0 0.32rem;
+}
+
+.kiosk-ap-updated {
+  margin-top: 0.42rem;
+}
+
+.kiosk-ap-updated span {
+  color: var(--kiosk-muted);
+  display: block;
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  margin-bottom: 0.12rem;
+  text-transform: uppercase;
+}
+
+.kiosk-ap-updated strong {
+  color: var(--kiosk-text);
+  display: block;
+  font-size: 0.88rem;
+  line-height: 1.15;
 }
 
 .kiosk-ap-credentials span,
@@ -1315,11 +1606,30 @@ body {
   border-radius: 8px;
   display: block;
   height: var(--kiosk-qr-size);
-  margin: 0.32rem auto;
+  margin: 0;
   max-height: min(100%, var(--kiosk-qr-size));
   max-width: min(100%, var(--kiosk-qr-size));
   padding: 0.28rem;
+  justify-self: end;
   width: min(100%, var(--kiosk-qr-size));
+}
+
+.kiosk-ap-reset {
+  background: #3a2512;
+  border: 1px solid var(--kiosk-warn);
+  border-radius: 6px;
+  color: var(--kiosk-text);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  min-height: 2.15rem;
+  width: 100%;
+}
+
+.kiosk-ap-reset:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .kiosk-detail-list {
@@ -1457,10 +1767,29 @@ body {
   margin: 0;
 }
 
-.kiosk-lcd-history,
 .kiosk-service-list {
   display: grid;
   gap: 0.34rem;
+}
+
+.kiosk-lcd-history {
+  display: grid;
+  gap: 0.45rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.kiosk-lcd-history__column {
+  display: grid;
+  gap: 0.3rem;
+  min-width: 0;
+}
+
+.kiosk-lcd-history__column h3 {
+  color: var(--kiosk-cyan);
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  margin: 0;
+  text-transform: uppercase;
 }
 
 .kiosk-lcd-history__item {
@@ -1469,7 +1798,7 @@ body {
   border-radius: 8px;
   display: grid;
   gap: 0.2rem;
-  padding: 0.4rem 0.58rem;
+  padding: 0.32rem 0.48rem;
 }
 
 .kiosk-lcd-history__meta {
@@ -1500,6 +1829,7 @@ body {
 }
 
 .kiosk-lcd-history__frame span {
+  display: block;
   overflow-wrap: anywhere;
 }
 
@@ -1521,6 +1851,29 @@ body {
 
 .kiosk-service.is-alert {
   border-left-color: var(--kiosk-red);
+}
+
+.kiosk-service--restartable {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  justify-content: normal;
+}
+
+.kiosk-service__restart {
+  background: #123a31;
+  border: 1px solid var(--kiosk-ok);
+  border-radius: 5px;
+  color: var(--kiosk-text);
+  font: inherit;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 0.28rem 0.42rem;
+}
+
+.kiosk-service__restart:disabled {
+  cursor: wait;
+  opacity: 0.65;
 }
 
 .kiosk-service span {
@@ -1678,7 +2031,7 @@ body {
     --kiosk-gap: 7px;
     --kiosk-pad: 7px;
     --kiosk-panel-pad: 8px;
-    --kiosk-qr-size: clamp(84px, 12vmin, 108px);
+    --kiosk-qr-size: clamp(126px, 18vmin, 162px);
   }
 
   .kiosk-panel__heading {
@@ -1730,6 +2083,11 @@ body {
     overflow: auto;
   }
 
+  .kiosk-tab-panels,
+  .kiosk-tab-panel {
+    min-height: 0;
+  }
+
   .kiosk-status__grid {
     grid-template-columns: 1fr;
   }
@@ -1753,6 +2111,10 @@ JS = r"""
   const fieldViewUrl = root.dataset.fieldViewUrl || '/kiosk/status/field-view/';
   const fieldViewPollSeconds = Number.parseInt(root.dataset.fieldViewPollSeconds || '3', 10);
   const fieldViewPollMs = Math.max(1, fieldViewPollSeconds || 3) * 1000;
+  const consoleUrl = root.dataset.consoleUrl || '/kiosk/console/';
+  const tabs = Array.from(root.querySelectorAll('[data-kiosk-tab]'));
+  const panels = Array.from(root.querySelectorAll('[role="tabpanel"]'));
+  const consoleFrame = root.querySelector('[data-kiosk-console-frame]');
   const takeover = root.querySelector('[data-kiosk-takeover]');
   const takeoverKind = root.querySelector('[data-kiosk-takeover-kind]');
   const takeoverStatus = root.querySelector('[data-kiosk-takeover-status]');
@@ -1763,6 +2125,94 @@ JS = r"""
   const fieldView = root.querySelector('[data-kiosk-field-view]');
   const fieldViewStatus = root.querySelector('[data-kiosk-field-view-status]');
   const fieldViewFrame = root.querySelector('[data-kiosk-field-view-frame]');
+  const restartButtons = Array.from(root.querySelectorAll('[data-kiosk-restart-service]'));
+  const apResetButton = root.querySelector('[data-kiosk-ap-reset]');
+
+  function selectTab(name) {
+    const selected = name === 'console' ? 'console' : 'kiosk';
+    for (const tab of tabs) {
+      const active = tab.dataset.kioskTab === selected;
+      tab.classList.toggle('is-active', active);
+      tab.setAttribute('aria-selected', active ? 'true' : 'false');
+    }
+    for (const panel of panels) {
+      const active = panel.id === `${selected}-view`;
+      panel.classList.toggle('is-active', active);
+      panel.setAttribute('aria-hidden', active ? 'false' : 'true');
+    }
+    if (selected === 'console' && consoleFrame && !consoleFrame.getAttribute('src')) {
+      consoleFrame.setAttribute('src', consoleUrl);
+    }
+  }
+
+  function refreshActiveTab(name) {
+    if (name === 'console' && consoleFrame) {
+      if (!consoleFrame.getAttribute('src')) {
+        consoleFrame.setAttribute('src', consoleUrl);
+        return;
+      }
+      consoleFrame.contentWindow.location.reload();
+      return;
+    }
+    window.location.reload();
+  }
+
+  for (const tab of tabs) {
+    tab.addEventListener('click', () => {
+      if (tab.classList.contains('is-active')) {
+        refreshActiveTab(tab.dataset.kioskTab);
+        return;
+      }
+      selectTab(tab.dataset.kioskTab);
+    });
+  }
+
+  for (const button of restartButtons) {
+    button.addEventListener('click', async () => {
+      const service = button.dataset.kioskRestartService || '';
+      if (!service || !window.confirm(`Restart ${service}?`)) {
+        return;
+      }
+      button.disabled = true;
+      try {
+        const response = await fetch(`${'/kiosk/status/services/'}${encodeURIComponent(service)}/restart`, {
+          method: 'POST',
+          cache: 'no-store',
+          headers: { Accept: 'application/json' },
+        });
+        if (!response.ok) {
+          throw new Error('restart failed');
+        }
+        window.setTimeout(() => window.location.reload(), 600);
+      } catch (_error) {
+        button.disabled = false;
+        window.alert(`Unable to restart ${service}.`);
+      }
+    });
+  }
+
+  if (apResetButton) {
+    apResetButton.addEventListener('click', async () => {
+      if (!window.confirm('Reset the AP? This rotates its password and reapplies the AP connection.')) {
+        return;
+      }
+      apResetButton.disabled = true;
+      try {
+        const response = await fetch('/kiosk/status/ap/reset/', {
+          method: 'POST',
+          cache: 'no-store',
+          headers: { Accept: 'application/json' },
+        });
+        if (!response.ok) {
+          throw new Error('AP reset failed');
+        }
+        window.setTimeout(() => window.location.reload(), 1000);
+      } catch (_error) {
+        apResetButton.disabled = false;
+        window.alert('Unable to reset the AP.');
+      }
+    });
+  }
 
   function setText(node, value) {
     if (node) {
@@ -1856,6 +2306,10 @@ JS = r"""
           root.dataset.fingerprint = payload.fingerprint;
           return;
         }
+        if (root.querySelector('[data-kiosk-tab="console"].is-active')) {
+          root.dataset.fingerprint = payload.fingerprint;
+          return;
+        }
         window.location.reload();
       }
     } catch (_error) {
@@ -1892,24 +2346,146 @@ class KioskStatusHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _send_console_response(self, status: int, content_type: str, body: bytes, headers: Any) -> None:
+        """Return a local console response without forwarding frame restrictions.
+
+        The status server listens on loopback only, so this lets its same-origin
+        iframe host the local Arthexis UI without weakening Arthexis for other
+        callers.
+        """
+
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("X-Content-Type-Options", "nosniff")
+        for name in ("Cache-Control", "Content-Disposition", "Content-Language", "Set-Cookie", "Vary"):
+            for value in headers.get_all(name, []):
+                self.send_header(name, value)
+        location = headers.get("Location")
+        if location:
+            self.send_header("Location", self._console_location(location))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _console_location(self, location: str) -> str:
+        if location.startswith("/") and not location.startswith("//"):
+            return f"{CONSOLE_PROXY_PREFIX}{location.lstrip('/')}"
+        try:
+            target = urlsplit(location)
+            console = urlsplit(console_target_url(CONSOLE_PROXY_PREFIX))
+        except ValueError:
+            return location
+        if target.scheme == console.scheme and target.netloc == console.netloc:
+            return urlunsplit(
+                ("", "", f"{CONSOLE_PROXY_PREFIX}{target.path.lstrip('/')}", target.query, "")
+            )
+        return location
+
+    def _proxy_console(self) -> None:
+        if not client_is_loopback(self._client_ip()):
+            self._send(403, "text/plain; charset=utf-8", b"console is local only\n")
+            return
+        path, _, query = self.path.partition("?")
+        target = console_target_url(path, query)
+        if not target:
+            self._send(503, "text/plain; charset=utf-8", b"console target is unavailable\n")
+            return
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            content_length = 0
+        if content_length < 0 or content_length > 8 * 1024 * 1024:
+            self._send(413, "text/plain; charset=utf-8", b"console request is too large\n")
+            return
+        body = self.rfile.read(content_length) if content_length else None
+        request_headers = {
+            name: value
+            for name in ("Accept", "Accept-Language", "Content-Type", "Cookie", "Referer", "User-Agent", "X-CSRFToken")
+            if (value := self.headers.get(name))
+        }
+        try:
+            request = Request(target, data=body, headers=request_headers, method=self.command)
+            response = CONSOLE_OPENER.open(request, timeout=5)  # noqa: S310 - validated loopback console.
+        except HTTPError as exc:
+            response = exc
+        except (OSError, TimeoutError, URLError, ValueError):
+            self._send(502, "text/plain; charset=utf-8", b"local Arthexis console is unavailable\n")
+            return
+        with response:
+            response_body = response.read()
+            content_type = response.headers.get("Content-Type", "application/octet-stream")
+            if content_type.lower().startswith("text/html"):
+                response_body = rewrite_console_html(response_body)
+            elif content_type.lower().startswith("text/css"):
+                response_body = rewrite_console_css(response_body)
+            status = int(getattr(response, "status", getattr(response, "code", 502)))
+            self._send_console_response(status, content_type, response_body, response.headers)
+
+    def _restart_service(self, path: str) -> None:
+        if not client_is_loopback(self._client_ip()):
+            self._send(403, "application/json; charset=utf-8", b'{"ok":false}')
+            return
+        service = path.removeprefix(SERVICE_RESTART_PATH_PREFIX).removesuffix("/restart")
+        if service not in RESTARTABLE_SERVICES:
+            self._send(403, "application/json; charset=utf-8", b'{"ok":false}')
+            return
+        ok = restart_service(service)
+        self.log_message("restart %s: %s", service, "ok" if ok else "failed")
+        body = json.dumps({"ok": ok, "service": service}).encode("utf-8")
+        self._send(200 if ok else 502, "application/json; charset=utf-8", body)
+
+    def _reset_access_point(self) -> None:
+        if not client_is_loopback(self._client_ip()):
+            self._send(403, "application/json; charset=utf-8", b'{"ok":false}')
+            return
+        ok = reset_access_point()
+        self.log_message("AP reset: %s", "ok" if ok else "failed")
+        self._send(
+            200 if ok else 502,
+            "application/json; charset=utf-8",
+            json.dumps({"ok": ok}).encode("utf-8"),
+        )
 
     def do_GET(self) -> None:
-        if self.path.split("?", 1)[0] in {"/data", "/kiosk/status/data/"}:
+        path = self.path.split("?", 1)[0]
+        if path.startswith(CONSOLE_PROXY_PREFIX):
+            self._proxy_console()
+            return
+        if path in {"/data", "/kiosk/status/data/"}:
             payload = build_payload(self._client_ip())
             body = json.dumps(payload, sort_keys=True, default=str).encode("utf-8")
             self._send(200, "application/json; charset=utf-8", body)
             return
-        if self.path.split("?", 1)[0] in {"/field-view", "/kiosk/status/field-view/"}:
+        if path in {"/field-view", "/kiosk/status/field-view/"}:
             body = json.dumps(field_view_context(), sort_keys=True).encode("utf-8")
             self._send(200, "application/json; charset=utf-8", body)
             return
-        if self.path.split("?", 1)[0] in {"/", "/kiosk/", "/kiosk/status/"}:
+        if path in {"/", "/kiosk/", "/kiosk/status/"}:
             payload = build_payload(self._client_ip())
             body = render_html(payload).encode("utf-8")
             self._send(200, "text/html; charset=utf-8", body)
             return
         self._send(404, "text/plain; charset=utf-8", b"not found\n")
+
+    def do_POST(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path == AP_RESET_PATH:
+            self._reset_access_point()
+            return
+        if path.startswith(SERVICE_RESTART_PATH_PREFIX) and path.endswith("/restart"):
+            self._restart_service(path)
+            return
+        if path.startswith(CONSOLE_PROXY_PREFIX):
+            self._proxy_console()
+            return
+        self._send(404, "text/plain; charset=utf-8", b"not found\n")
+
+    def do_HEAD(self) -> None:
+        self.do_GET()
 
 
 def run_server(host: str, port: int) -> int:

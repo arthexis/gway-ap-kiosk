@@ -32,6 +32,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "rfid-modes"
 LOCAL_SCAN_FILE = Path.home() / ".local" / "state" / "rfid-mode" / "rfid-scan.json"
 LEGACY_ARTHEXIS_SCAN_FILE = Path("/home/arthe/arthexis/.locks/rfid-scan.json")
@@ -48,6 +49,14 @@ NEW_BEFORE_RESOLVE_RE = re.compile(
 )
 NEW_REQUIRES_HOLD_RE = re.compile(
     r"^\s*#\s*RFID_MODE_NEW_REQUIRES_HOLD\s*=\s*(?:1|true|yes)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+PREEMPT_ACTION_RE = re.compile(
+    r"^\s*#\s*RFID_MODE_PREEMPT_ACTION\s*=\s*(?:1|true|yes)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+STATEFUL_MODE_RE = re.compile(
+    r"^\s*#\s*RFID_MODE_STATEFUL\s*=\s*(?:1|true|yes)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 RESET_NAVIGATION_ON_EXIT_RE = re.compile(
@@ -413,6 +422,106 @@ class ModeRunner:
             return False
         return bool(RESET_NAVIGATION_ON_EXIT_RE.search(text))
 
+    def script_is_stateful_mode(self, script: Path) -> bool:
+        try:
+            text = script.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return False
+        return bool(STATEFUL_MODE_RE.search(text))
+
+    def top_level_sidecar_is_one_shot(self, level: Path, card_id: str, script: Path) -> bool:
+        child_dir = level / card_id
+        return level == self.cards_dir and child_dir.is_dir() and not self.script_is_stateful_mode(script)
+
+    def script_runs_preempt_action(self, script: Path) -> bool:
+        try:
+            text = script.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return False
+        return bool(PREEMPT_ACTION_RE.search(text))
+
+    def run_preempt_action(
+        self, scan: Scan, script: Path, level: Path, path_parts: list[str]
+    ) -> str:
+        """Run a card's secondary action before normal mode-switch preemption.
+
+        Exit 0 consumes the scan. Exit 75 continues into the card's primary
+        action. Any other result is kept safe by consuming the scan without
+        switching away from the current mode.
+        """
+        if not self.script_runs_preempt_action(script):
+            return "continue"
+        if not self.script_is_runnable(script):
+            self.log("preempt_action_not_executable", card_id=scan.card_id, script=str(script))
+            return "failed"
+
+        started_at = now_iso()
+        safe_time = re.sub(r"[^0-9A-Za-z_.-]", "-", started_at)
+        preempt_log = self.mode_log_dir / f"{safe_time}_{scan.card_id}_preempt.log"
+        env = os.environ.copy()
+        env.update(trait_environment(scan.payload))
+        env.update(
+            {
+                "RFID_MODE_CARD_ID": scan.card_id,
+                "RFID_MODE_SCANNED_AT": scan.scanned_at,
+                "RFID_MODE_SCAN_FILE": str(self.scan_file),
+                "RFID_MODE_LOCK_DIR": str(self.scan_file.parent),
+                "RFID_MODE_LCD_LOCK_DIR": str(self.lcd_lock_dir()),
+                "RFID_MODE_SCRIPT": str(script),
+                "RFID_MODE_KIND": "preempt",
+                "RFID_MODE_CONFIG_DIR": str(self.config_dir),
+                "RFID_MODE_LOG_DIR": str(self.log_dir),
+                "RFID_MODE_STATE_DIR": str(level),
+                "RFID_MODE_STATE_PATH": "/".join(path_parts),
+                "RFID_MODE_PREEMPT_ONLY": "1",
+                "RFID_MODE_PREVIOUS_CARD_ID": str(self.state.get("current_card") or ""),
+            }
+        )
+        self.log("preempt_action_start", card_id=scan.card_id, script=str(script), log=str(preempt_log))
+        try:
+            with preempt_log.open("a", encoding="utf-8") as log_handle:
+                proc = subprocess.Popen(
+                    self.script_command(script),
+                    cwd=str(level),
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    start_new_session=True,
+                )
+                try:
+                    status = proc.wait(timeout=max(self.stop_timeout + 2, 8))
+                except subprocess.TimeoutExpired:
+                    self.log("preempt_action_timeout", card_id=scan.card_id, script=str(script), pid=proc.pid)
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    status = proc.wait()
+        except OSError as exc:
+            self.log("preempt_action_start_failed", card_id=scan.card_id, script=str(script), error=str(exc))
+            return "failed"
+
+        if status == 0:
+            self.log("preempt_action_handled", card_id=scan.card_id, script=str(script))
+            self.write_state(
+                last_scan_key=scan.key,
+                last_scan_card=scan.card_id,
+                last_scan_seen_at=now_iso(),
+            )
+            return "handled"
+        if status == NEW_SCRIPT_CONTINUE_EXIT:
+            self.log("preempt_action_continue", card_id=scan.card_id, script=str(script))
+            return "continue"
+        self.log("preempt_action_failed", card_id=scan.card_id, script=str(script), returncode=status)
+        self.write_state(
+            last_scan_key=scan.key,
+            last_scan_card=scan.card_id,
+            last_scan_seen_at=now_iso(),
+        )
+        return "failed"
+
     def one_shot_mode_presence_already_handled(
         self, scan: Scan, level: Path, path_parts: list[str]
     ) -> bool:
@@ -423,7 +532,7 @@ class ModeRunner:
         if not child_dir.is_dir() or len(scripts) != 1:
             return False
         script = scripts[0]
-        if not self.script_resets_navigation_on_exit(script):
+        if not self.top_level_sidecar_is_one_shot(level, scan.card_id, script):
             return False
         return (
             self.state.get("last_one_shot_mode_presence_id") == self.scan_presence_id(scan)
@@ -792,6 +901,8 @@ except Exception as exc:
         if level.name == card_id and scripts:
             return Resolution("reset", reason="directory_contains_same_rfid_script")
         if child_dir.is_dir() and scripts:
+            if self.top_level_sidecar_is_one_shot(level, card_id, scripts[0]):
+                return Resolution("execute_top_level_action", path=scripts[0], next_path=self.cards_dir)
             return Resolution("execute_and_navigate", path=scripts[0], next_path=child_dir)
         if child_dir.is_dir():
             return Resolution("navigate", path=child_dir)
@@ -809,13 +920,16 @@ except Exception as exc:
 
     def _clear_dead_stored_process(self) -> None:
         if self.state.get("pid") and not self.process_alive_matches_state():
+            current_card = self.state.get("current_card")
+            current_script = str(self.state.get("current_script") or "")
+            current_presence_id = str(self.state.get("current_presence_id") or "")
             self.log(
                 "state_cleared_stale_process",
                 pid=self.state.get("pid"),
-                current_card=self.state.get("current_card"),
-                current_script=self.state.get("current_script"),
+                current_card=current_card,
+                current_script=current_script,
             )
-            self.write_state(
+            updates: dict[str, Any] = dict(
                 current_card=None,
                 current_script=None,
                 current_mode_kind=None,
@@ -827,6 +941,25 @@ except Exception as exc:
                 hold_script=None,
                 hold_presence_id=None,
             )
+            if current_script and (
+                self.state.get("current_mode_kind") == "action"
+                or self.script_resets_navigation_on_exit(Path(current_script))
+            ):
+                updates.update(
+                    state_path=[],
+                    state_dir=str(self.cards_dir),
+                    last_one_shot_mode_card=current_card,
+                    last_one_shot_mode_script=current_script,
+                    last_one_shot_mode_presence_id=current_presence_id,
+                    last_one_shot_mode_reset_at=now_iso(),
+                )
+                self.log(
+                    "stale_process_navigation_reset",
+                    card_id=current_card,
+                    script=current_script,
+                    presence_id=current_presence_id,
+                )
+            self.write_state(**updates)
 
     def current_is_alive(self) -> bool:
         if self.current_proc is not None:
@@ -851,7 +984,10 @@ except Exception as exc:
         current_presence_id = str(self.state.get("current_presence_id") or "")
         reset_navigation = (
             bool(current_script)
-            and self.script_resets_navigation_on_exit(Path(current_script))
+            and (
+                self.state.get("current_mode_kind") == "action"
+                or self.script_resets_navigation_on_exit(Path(current_script))
+            )
         )
         self.current_proc = None
         updates: dict[str, Any] = dict(
@@ -903,7 +1039,7 @@ except Exception as exc:
             return
         if not self.process_alive_matches_state():
             self.log("mode_stop_skipped_stale_pid", pid=pid, script=script, reason=reason)
-            self.write_state(
+            updates: dict[str, Any] = dict(
                 current_card=None,
                 current_script=None,
                 current_mode_kind=None,
@@ -915,6 +1051,25 @@ except Exception as exc:
                 hold_script=None,
                 hold_presence_id=None,
             )
+            if script and (
+                self.state.get("current_mode_kind") == "action"
+                or self.script_resets_navigation_on_exit(Path(script))
+            ):
+                updates.update(
+                    state_path=[],
+                    state_dir=str(self.cards_dir),
+                    last_one_shot_mode_card=self.state.get("current_card"),
+                    last_one_shot_mode_script=script,
+                    last_one_shot_mode_presence_id=str(self.state.get("current_presence_id") or ""),
+                    last_one_shot_mode_reset_at=now_iso(),
+                )
+                self.log(
+                    "stale_process_navigation_reset",
+                    card_id=self.state.get("current_card"),
+                    script=script,
+                    presence_id=str(self.state.get("current_presence_id") or ""),
+                )
+            self.write_state(**updates)
             return
 
         self.log(
@@ -1665,7 +1820,27 @@ except Exception as exc:
         result = "continue" if status == NEW_SCRIPT_CONTINUE_EXIT and not timed_out else "handled"
         updates["last_new_result"] = result
         updates["last_new_completed_at"] = now_iso()
-        if status == 0 and not timed_out and promote_on_success:
+        reset_navigation = (
+            status == 0
+            and not timed_out
+            and self.script_resets_navigation_on_exit(script)
+        )
+        if reset_navigation:
+            updates.update(
+                state_path=[],
+                state_dir=str(self.cards_dir),
+                last_new_reset_at=now_iso(),
+                last_new_reset_card=scan.card_id,
+                last_new_reset_script=str(script),
+                **self.clear_new_hold_arm_updates(),
+            )
+            self.log(
+                "new_script_navigation_reset",
+                card_id=scan.card_id,
+                script=str(script),
+                presence_id=presence_id,
+            )
+        elif status == 0 and not timed_out and promote_on_success:
             updates.update(self.new_script_promotion_state(scan, level, path_parts))
         self.write_state(**updates)
         return result
@@ -1834,6 +2009,11 @@ except Exception as exc:
                 return
         resolution = self.resolve_transition(level, scan.card_id)
 
+        if resolution.action in {"execute", "execute_and_navigate", "execute_top_level_action"} and resolution.path is not None:
+            preempt_result = self.run_preempt_action(scan, resolution.path, level, path_parts)
+            if preempt_result in {"handled", "failed"}:
+                return
+
         if (
             resolution.action == "reset"
             and resolution.reason == "no_matching_transition"
@@ -1891,6 +2071,22 @@ except Exception as exc:
 
         if resolution.action == "execute" and resolution.path is not None:
             self.start_mode(scan, resolution.path, level, path_parts)
+            return
+
+        if (
+            resolution.action == "execute_top_level_action"
+            and resolution.path is not None
+            and resolution.next_path is not None
+        ):
+            self.start_mode(
+                scan,
+                resolution.path,
+                level,
+                path_parts,
+                next_level=resolution.next_path,
+                next_path_parts=[],
+                mode_kind="action",
+            )
             return
 
         if (

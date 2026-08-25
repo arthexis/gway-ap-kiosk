@@ -98,3 +98,77 @@ def test_bluetooth_keyboard_binding_dry_run_uses_placeholders(tmp_path):
 
     assert result.returncode == 0
     assert "TEST_CARD" in result.stdout
+
+
+def test_preempt_action_can_continue_or_handle_before_mode_switch(tmp_path):
+    config_dir = tmp_path / "rfid-modes"
+    runner = mode_runner.ModeRunner(
+        scan_file=tmp_path / "scan.json",
+        config_dir=config_dir,
+        poll_seconds=0.1,
+        stop_timeout=0.1,
+    )
+    runner.setup()
+    script = config_dir / "cards" / "AUTO.sh"
+    script.write_text(
+        "#!/usr/bin/env bash\n# RFID_MODE_PREEMPT_ACTION=1\nexit 75\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    scan = mode_runner.Scan(card_id="AUTO", scanned_at="now", key="AUTO|now", payload={})
+
+    assert runner.run_preempt_action(scan, script, config_dir / "cards", []) == "continue"
+
+    script.write_text(
+        "#!/usr/bin/env bash\n# RFID_MODE_PREEMPT_ACTION=1\nexit 0\n",
+        encoding="utf-8",
+    )
+    assert runner.run_preempt_action(scan, script, config_dir / "cards", []) == "handled"
+    assert runner.state["last_scan_card"] == "AUTO"
+
+
+def test_top_level_sidecar_defaults_to_one_shot_action(tmp_path):
+    config_dir = tmp_path / "rfid-modes"
+    runner = mode_runner.ModeRunner(
+        scan_file=tmp_path / "scan.json",
+        config_dir=config_dir,
+        poll_seconds=0.1,
+        stop_timeout=0.1,
+        dry_run=True,
+    )
+    runner.setup()
+    card_dir = config_dir / "cards" / "MUTE"
+    card_dir.mkdir()
+    script = config_dir / "cards" / "MUTE.sh"
+    script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    script.chmod(0o755)
+    scan = mode_runner.Scan(card_id="MUTE", scanned_at="now", key="MUTE|now", payload={})
+
+    assert runner.resolve_transition(config_dir / "cards", "MUTE").action == "execute_top_level_action"
+
+    runner.handle_scan(scan)
+
+    assert runner.state["current_card"] == "MUTE"
+    assert runner.state["current_mode_kind"] == "action"
+    assert runner.state["state_path"] == []
+
+
+def test_top_level_sidecar_can_opt_into_stateful_mode(tmp_path):
+    config_dir = tmp_path / "rfid-modes"
+    runner = mode_runner.ModeRunner(
+        scan_file=tmp_path / "scan.json",
+        config_dir=config_dir,
+        poll_seconds=0.1,
+        stop_timeout=0.1,
+    )
+    runner.setup()
+    card_dir = config_dir / "cards" / "MODE"
+    card_dir.mkdir()
+    script = config_dir / "cards" / "MODE.sh"
+    script.write_text("#!/usr/bin/env bash\n# RFID_MODE_STATEFUL=1\nexit 0\n", encoding="utf-8")
+    script.chmod(0o755)
+
+    resolution = runner.resolve_transition(config_dir / "cards", "MODE")
+
+    assert resolution.action == "execute_and_navigate"
+    assert resolution.next_path == card_dir

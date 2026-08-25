@@ -17,7 +17,7 @@ This repository snapshots the kiosk work installed on this host:
 - `config/labwc/window-rules.xml`: labwc kiosk window-rule snippet.
 - `desktop/` and `applications/`: local launchers for `kiosk-mode`.
 
-The deployed status page currently refreshes every 30 seconds and includes local TODO status. The email watcher is intentionally outside this repository except where `gway-kiosk-status` reports its timer state.
+The deployed status page refreshes every 30 seconds and includes local TODO status. Its top row defaults to the `KIOSK` tab; `CONSOLE` loads the local Arthexis UI through a loopback-only same-origin proxy, so Arthexis frame protections remain in place. Set `KIOSK_CONSOLE_URL` only to a loopback HTTP Arthexis URL when overriding the default `http://127.0.0.1:8888/`.
 
 ## Live charger field view
 
