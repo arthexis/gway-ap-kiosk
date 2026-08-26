@@ -18,3 +18,11 @@ def test_ap_reveal_helpers_parse():
     for script in (ROOT / "scripts/ap/prodigy-password-lcd-60s", ROOT / "scripts/ap/prodigy-reveal-ap"):
         result = subprocess.run(["bash", "-n", str(script)], check=False, capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
+
+
+def test_vnc_kiosk_does_not_track_realvnc_child_pid():
+    unit = ROOT / "kiosk/systemd/arthexis-vnc-kiosk.service"
+    text = unit.read_text(encoding="utf-8")
+
+    assert "Type=forking" in text
+    assert "PIDFile=" not in text

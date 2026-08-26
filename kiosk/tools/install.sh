@@ -83,6 +83,17 @@ install_root_file 0644 systemd/arthexis-vnc-kiosk.service.d/98-boot-stagger-30s.
 install_root_file 0644 systemd/bastion-usb-refresh.service.d/60-kiosk-layout.conf /etc/systemd/system/bastion-usb-refresh.service.d/60-kiosk-layout.conf
 
 install_root_file 0644 config/arthexis-kiosk/openbox-rc.xml /etc/arthexis-kiosk/openbox-rc.xml
+if id vnc-kiosk >/dev/null 2>&1; then
+  sudo install -d -o vnc-kiosk -g vnc-kiosk -m 0700 \
+    /var/lib/arthexis-vnc-kiosk \
+    /var/lib/arthexis-vnc-kiosk/.config \
+    /var/lib/arthexis-vnc-kiosk/.cache \
+    /var/lib/arthexis-vnc-kiosk/.local \
+    /var/lib/arthexis-vnc-kiosk/.local/share \
+    /var/lib/arthexis-vnc-kiosk/runtime \
+    /var/lib/arthexis-vnc-kiosk/chromium-cache \
+    /var/lib/arthexis-vnc-kiosk/chromium-profile
+fi
 install_user_file 0644 "desktop/Kiosk Mode.desktop" "/home/arthe/Desktop/Kiosk Mode.desktop"
 install_user_file 0644 applications/kiosk-mode.desktop /home/arthe/.local/share/applications/kiosk-mode.desktop
 

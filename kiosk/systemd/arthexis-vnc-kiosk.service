@@ -12,7 +12,6 @@ Group=vnc-kiosk
 WorkingDirectory=/var/lib/arthexis-vnc-kiosk
 Environment=HOME=/var/lib/arthexis-vnc-kiosk
 EnvironmentFile=/etc/default/arthexis-vnc-kiosk
-PIDFile=/var/lib/arthexis-vnc-kiosk/.vnc/%H:99.pid
 ExecStartPre=-/usr/bin/vncserver-virtual -kill :99
 ExecStartPre=/usr/bin/vncserver-virtual -clean
 ExecStart=/usr/bin/vncserver-virtual :99 -geometry ${KIOSK_GEOMETRY} -depth ${KIOSK_DEPTH} -vncconfigfile ${KIOSK_VNC_CONFIG}

@@ -124,7 +124,13 @@ export HOME=/var/lib/arthexis-vnc-kiosk
 export XDG_CONFIG_HOME="${HOME}/.config"
 export XDG_CACHE_HOME="${HOME}/.cache"
 export XDG_DATA_HOME="${HOME}/.local/share"
+export XDG_DATA_DIRS="${XDG_DATA_HOME}"
 export XDG_RUNTIME_DIR="${HOME}/runtime"
+export XDG_CURRENT_DESKTOP=Openbox
+export DESKTOP_SESSION=openbox
+export GIO_USE_VFS=local
+export GTK_USE_PORTAL=0
+export NO_AT_BRIDGE=1
 
 mkdir -p \
   "${XDG_CONFIG_HOME}" \
@@ -207,7 +213,7 @@ status_common_flags=(
   --disable-component-update \
   --disable-crash-reporter \
   --disable-extensions \
-  --disable-features=AutofillServerCommunication,MediaRouter,OptimizationHints,Translate \
+  --disable-features=AutofillServerCommunication,MediaRouter,OptimizationHints,Translate,WebRtcPipeWireCapturer \
   --disable-gpu \
   --disable-print-preview \
   --disable-session-crashed-bubble \
