@@ -16,11 +16,12 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 HOME = Path.home()
 DEFAULT_STATE_DIR = HOME / ".local" / "state" / "rfid-mode"
 DEFAULT_SCAN_FILE = DEFAULT_STATE_DIR / "rfid-scan.json"
+DEFAULT_QUEUE_DIR = DEFAULT_STATE_DIR / "queue"
 DEFAULT_LOG_FILE = DEFAULT_STATE_DIR / "rfid-scans.ndjson"
 DEFAULT_STATUS_FILE = DEFAULT_STATE_DIR / "rfid-scan-publisher.json"
 DEFAULT_LCD_LOCK_DIR = HOME / ".local" / "state" / "lcd-lockfiles"
@@ -43,6 +44,9 @@ COMMON_KEYS = (
 )
 SENSITIVE_LOG_KEYS = {"keys"}
 MATCH_PREFIX_LENGTH = 8
+MODE_LABEL_RE = re.compile(r"^\s*#\s*RFID mode:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+QUEUE_DEEP_DATA_RE = re.compile(r"^\s*#\s*RFID_MODE_QUEUE_DEEP_DATA\s*=\s*(?:1|true|yes)\s*$", re.IGNORECASE | re.MULTILINE)
+QUEUE_INTERRUPT_RE = re.compile(r"^\s*#\s*RFID_MODE_QUEUE_INTERRUPT\s*=\s*(?:1|true|yes)\s*$", re.IGNORECASE | re.MULTILINE)
 
 STOP = False
 
@@ -69,6 +73,14 @@ def parse_bool(raw: object, default: bool = False) -> bool:
 
 def expand_path(raw: str | os.PathLike[str]) -> Path:
     return Path(os.path.expandvars(os.path.expanduser(str(raw))))
+
+
+DEFAULT_MODE_CARDS_DIR = expand_path(
+    os.environ.get(
+        "RFID_SCAN_MODE_CARDS_DIR",
+        str(expand_path(os.environ.get("RFID_MODE_CONFIG_DIR", HOME / ".config" / "rfid-modes")) / "cards"),
+    )
+)
 
 
 def clean_ascii(raw: object, *, limit: int = 64) -> str:
@@ -112,12 +124,22 @@ def key_to_bytes(raw: str) -> list[int]:
         return FACTORY_KEY
 
 
-def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
+def atomic_write_json(path: Path, payload: dict[str, Any], *, durable: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     try:
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        with tmp.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            if durable:
+                os.fsync(handle.fileno())
         tmp.replace(path)
+        if durable:
+            directory_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
     finally:
         try:
             if tmp.exists():
@@ -162,6 +184,78 @@ def write_lcd_event(lock_dir: Path, event_id: int, line1: str, line2: str, *, se
     text = f"{clean_ascii(line1, limit=64)}\n{clean_ascii(line2, limit=64)}\n{expires.isoformat()}\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def clear_lcd_event(lock_dir: Path, event_id: int) -> None:
+    try:
+        (lock_dir / f"lcd-event-{event_id}.lck").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def first_label_line(path: Path) -> str:
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    for line in raw.splitlines():
+        clean = clean_ascii(line)
+        if clean:
+            return clean
+    return ""
+
+
+def script_mode_label(path: Path) -> str:
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    match = MODE_LABEL_RE.search(raw)
+    if match:
+        return clean_ascii(match.group(1))
+    return clean_ascii(path.stem.replace("_", " ").replace("-", " "))
+
+
+def registered_mode_label(rfid: str, mode_cards_dir: Path | None) -> str:
+    if mode_cards_dir is None:
+        return "UNLINKED"
+    card_id = normalize_card_id(rfid)
+    if not card_id:
+        return "UNLINKED"
+    card_dir = mode_cards_dir / card_id
+    if card_dir.is_dir():
+        label = first_label_line(card_dir / "label.txt")
+        if label:
+            return label
+    for suffix in (".sh", ".py"):
+        script = mode_cards_dir / f"{card_id}{suffix}"
+        if script.is_file():
+            label = script_mode_label(script)
+            if label:
+                return label
+    if card_dir.is_dir():
+        return "REGISTERED"
+    return "UNLINKED"
+
+
+def rfid_lcd_line(rfid: str) -> str:
+    card_id = normalize_card_id(rfid)
+    return f"RFID {card_id}" if card_id else "RFID"
+
+
+def card_queue_policy(rfid: str, mode_cards_dir: Path | None) -> tuple[bool, bool]:
+    """Return (needs_deep_data, interrupt) declared by the local mapping."""
+    if mode_cards_dir is None:
+        return False, False
+    card_id = normalize_card_id(rfid)
+    candidates = [mode_cards_dir / f"{card_id}{suffix}" for suffix in ("", ".sh", ".py")]
+    candidates.extend(mode_cards_dir / card_id / name for name in ("new.sh", "new.py", "hold.sh", "hold.py"))
+    text = "\n".join(
+        path.read_text(encoding="utf-8", errors="ignore")
+        for path in candidates
+        if path.is_file()
+    )
+    return bool(QUEUE_DEEP_DATA_RE.search(text)), bool(QUEUE_INTERRUPT_RE.search(text))
 
 
 def decode_fixed_ascii(values: list[int]) -> str:
@@ -340,12 +434,20 @@ class HardwareReader:
             return None
         return [int(value) & 0xFF for value in list(data)[:16]]
 
-    def read_deep(self, uid: list[int], *, max_blocks: int) -> dict[str, Any]:
+    def read_deep(
+        self,
+        uid: list[int],
+        *,
+        max_blocks: int,
+        progress: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
         dump: list[dict[str, Any]] = []
         block_map: dict[int, list[int]] = {}
         verified_keys: dict[str, Any] = {"a": "", "a_verified": False, "b": "", "b_verified": False}
         started = now_iso()
         for block in range(max(0, max_blocks)):
+            if progress is not None:
+                progress()
             for key_type in ("A", "B"):
                 for key_value in COMMON_KEYS:
                     data = self.read_block(block, uid, key_type=key_type, key_bytes=key_to_bytes(key_value))
@@ -397,6 +499,53 @@ class Publisher:
         self.deep_attempted = False
         self.release_emitted = True
         self.current_payload: dict[str, Any] | None = None
+        self.current_queued = False
+        self.current_requires_deep = False
+        self.current_interrupt = False
+        self.deep_progress_beep_at = 0.0
+
+    def publish_scan_lcd(self, rfid: str, line2: str | None = None) -> None:
+        write_lcd_event(
+            self.args.lcd_lock_dir,
+            self.args.lcd_event_id,
+            rfid_lcd_line(rfid),
+            line2 or registered_mode_label(rfid, self.args.mode_cards_dir),
+            seconds=max(6, self.args.lcd_event_seconds),
+        )
+
+    def enqueue_current(self, trigger: str) -> None:
+        """Durably commit one card presence for the mode runner.
+
+        The scan file remains a status snapshot.  Queue records are the only
+        delivery mechanism for card commands, so a slow runner cannot lose a
+        later scan by observing a newer snapshot first.
+        """
+        if self.current_queued or not self.current_rfid:
+            return
+        payload = dict(self.current_payload or {})
+        event_id = f"{time.time_ns():020d}-{uuid.uuid4().hex}"
+        payload.update(
+            {
+                "queue_event_id": event_id,
+                "queue_trigger": trigger,
+                "queued_at": now_iso(),
+                "released": False,
+                "card_present": bool(payload.get("card_present", True)),
+            }
+        )
+        queue_record = {"schema": "arthexis.rfid.queue.v1", "event_id": event_id, "scan": payload}
+        queue_state = "interrupt" if self.current_interrupt else "pending"
+        pending = self.args.queue_dir / queue_state / f"{event_id}.json"
+        atomic_write_json(pending, queue_record, durable=True)
+        self.current_queued = True
+        self.current_payload = payload
+        self.status(last_queued=queue_record)
+        append_jsonl(
+            self.args.event_log,
+            {"timestamp": now_iso(), "event": "queue", "rfid": self.current_rfid, "trigger": trigger, "event_id": event_id},
+        )
+        play_sound(self.args.sound_hook, "rfid-queued", self.args.queued_sound, self.current_rfid)
+        clear_lcd_event(self.args.lcd_lock_dir, self.args.lcd_event_id)
 
     def payload_is_deep_complete(self, payload: dict[str, Any] | None = None) -> bool:
         payload = payload if payload is not None else self.current_payload
@@ -457,10 +606,12 @@ class Publisher:
         self.last_emit_monotonic = observed_monotonic
         self.deep_attempted = False
         self.release_emitted = False
+        self.current_queued = False
+        self.current_requires_deep, self.current_interrupt = card_queue_policy(observation.rfid, self.args.mode_cards_dir)
         payload = self.emit(self.base_payload(observation, observed_at, observed_monotonic))
         append_jsonl(self.args.event_log, {"timestamp": now_iso(), "event": "scan", "rfid": observation.rfid})
         play_sound(self.args.sound_hook, "rfid-scan", self.args.normal_sound, observation.rfid)
-        write_lcd_event(self.args.lcd_lock_dir, self.args.lcd_event_id, "RFID SCAN", payload.get("display_label") or observation.rfid, seconds=self.args.lcd_event_seconds)
+        self.publish_scan_lcd(str(payload.get("rfid") or observation.rfid))
 
     def refresh_presence(self, observation: ScanObservation, observed_at: str, observed_monotonic: float) -> None:
         self.last_seen_monotonic = observed_monotonic
@@ -483,14 +634,33 @@ class Publisher:
             self.last_emit_monotonic = observed_monotonic
 
     def maybe_deep_read(self, observation: ScanObservation, observed_at: str, observed_monotonic: float) -> None:
+        if not self.current_requires_deep:
+            return
         if self.deep_attempted:
             return
         if observed_monotonic - self.presence_started_monotonic < self.args.deep_hold_seconds:
             return
         self.deep_attempted = True
+        self.deep_progress_beep_at = 0.0
+
+        def progress() -> None:
+            now = time.monotonic()
+            if now - self.deep_progress_beep_at >= 1.0:
+                self.publish_scan_lcd(observation.rfid)
+                play_sound(self.args.sound_hook, "rfid-deep-progress", self.args.deep_progress_sound, observation.rfid)
+                self.deep_progress_beep_at = now
+
         base = self.base_payload(observation, observed_at, observed_monotonic)
         try:
-            deep = self.reader.read_deep(observation.uid, max_blocks=self.args.deep_blocks)
+            progress()
+            deep = self.reader.read_deep(observation.uid, max_blocks=self.args.deep_blocks, progress=progress)
+        except Exception as exc:
+            deep = {
+                "deep_read": False,
+                "deep_scan": {"automatic": True, "attempted_at": observed_at, "completed_at": now_iso(), "status": "failed", "error": str(exc), "blocks": 0},
+                "dump": [],
+                "keys": {},
+            }
         finally:
             self.reader.close_crypto()
         payload = dict(self.current_payload or base)
@@ -507,9 +677,7 @@ class Publisher:
                 "blocks": len(emitted.get("dump") or []),
             },
         )
-        if (emitted.get("deep_scan") or {}).get("status") == "ok":
-            play_sound(self.args.sound_hook, "rfid-deep-read-complete", self.args.deep_sound, observation.rfid)
-            write_lcd_event(self.args.lcd_lock_dir, self.args.lcd_event_id, "RFID DEEP OK", emitted.get("display_label") or observation.rfid, seconds=self.args.lcd_event_seconds)
+        self.enqueue_current("deep_complete")
         self.last_seen_monotonic = time.monotonic()
         self.last_emit_monotonic = self.last_seen_monotonic
 
@@ -535,10 +703,15 @@ class Publisher:
         self.emit(payload)
         append_jsonl(self.args.event_log, {"timestamp": now_iso(), "event": "release", "rfid": self.current_rfid})
         self.release_emitted = True
+        if not self.current_queued:
+            self.enqueue_current("released")
         self.current_rfid = ""
         self.current_uid = []
         self.first_presence_at = ""
         self.current_payload = None
+        self.current_queued = False
+        self.current_requires_deep = False
+        self.current_interrupt = False
 
     def handle_observation(self, observation: ScanObservation) -> None:
         observed_at = now_iso()
@@ -548,6 +721,10 @@ class Publisher:
             or not self.current_rfid
         )
         if new_presence:
+            if self.current_rfid and not self.current_queued:
+                self.enqueue_current("superseded")
+            if self.current_rfid:
+                clear_lcd_event(self.args.lcd_lock_dir, self.args.lcd_event_id)
             self.start_presence(observation, observed_at, observed_monotonic)
         else:
             self.refresh_presence(observation, observed_at, observed_monotonic)
@@ -597,15 +774,19 @@ def default_cards_file() -> Path | None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Standalone local RFID scan publisher.")
     parser.add_argument("--scan-file", type=Path, default=expand_path(os.environ.get("RFID_SCAN_FILE", DEFAULT_SCAN_FILE)))
+    parser.add_argument("--queue-dir", type=Path, default=expand_path(os.environ.get("RFID_SCAN_QUEUE_DIR", DEFAULT_QUEUE_DIR)))
     parser.add_argument("--log-file", type=Path, default=expand_path(os.environ.get("RFID_SCAN_LOG_FILE", DEFAULT_LOG_FILE)))
     parser.add_argument("--event-log", type=Path, default=expand_path(os.environ.get("RFID_SCAN_EVENT_LOG", DEFAULT_STATE_DIR / "events.ndjson")))
     parser.add_argument("--status-file", type=Path, default=expand_path(os.environ.get("RFID_SCAN_STATUS_FILE", DEFAULT_STATUS_FILE)))
     parser.add_argument("--lcd-lock-dir", type=Path, default=expand_path(os.environ.get("RFID_SCAN_LCD_LOCK_DIR", DEFAULT_LCD_LOCK_DIR)))
     parser.add_argument("--lcd-event-id", type=int, default=int(os.environ.get("RFID_SCAN_LCD_EVENT_ID", "4")))
     parser.add_argument("--lcd-event-seconds", type=int, default=int(os.environ.get("RFID_SCAN_LCD_EVENT_SECONDS", "10")))
+    parser.add_argument("--mode-cards-dir", type=Path, default=DEFAULT_MODE_CARDS_DIR)
     parser.add_argument("--sound-hook", type=Path, default=expand_path(os.environ.get("RFID_SCAN_SOUND_HOOK", DEFAULT_SOUND_HOOK)))
     parser.add_argument("--normal-sound", default=os.environ.get("RFID_SCAN_NORMAL_SOUND", "notice"))
     parser.add_argument("--deep-sound", default=os.environ.get("RFID_SCAN_DEEP_SOUND", "ok"))
+    parser.add_argument("--queued-sound", default=os.environ.get("RFID_SCAN_QUEUED_SOUND", "ok"))
+    parser.add_argument("--deep-progress-sound", default=os.environ.get("RFID_SCAN_DEEP_PROGRESS_SOUND", "attention"))
     parser.add_argument("--cards-file", type=Path, default=default_cards_file())
     parser.add_argument("--spi-bus", type=int, default=int(os.environ.get("RFID_SPI_BUS", "0")))
     parser.add_argument("--spi-device", type=int, default=int(os.environ.get("RFID_SPI_DEVICE", "0")))
@@ -615,7 +796,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--refresh-seconds", type=float, default=float(os.environ.get("RFID_SCAN_REFRESH_SECONDS", "1.0")))
     parser.add_argument("--presence-gap-seconds", type=float, default=float(os.environ.get("RFID_SCAN_PRESENCE_GAP_SECONDS", "8.0")))
     parser.add_argument("--release-gap-seconds", type=float, default=float(os.environ.get("RFID_SCAN_RELEASE_GAP_SECONDS", "1.2")))
-    parser.add_argument("--deep-hold-seconds", type=float, default=float(os.environ.get("RFID_SCAN_DEEP_HOLD_SECONDS", "2.0")))
+    parser.add_argument("--deep-hold-seconds", type=float, default=float(os.environ.get("RFID_SCAN_DEEP_HOLD_SECONDS", "6.0")))
     parser.add_argument("--deep-blocks", type=int, default=int(os.environ.get("RFID_SCAN_DEEP_BLOCKS", "64")))
     parser.add_argument("--error-sleep-seconds", type=float, default=float(os.environ.get("RFID_SCAN_ERROR_SLEEP_SECONDS", "5.0")))
     parser.add_argument("--once", action="store_true")
@@ -628,7 +809,7 @@ def main() -> int:
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
     args = build_parser().parse_args()
-    for name in ("scan_file", "log_file", "event_log", "status_file", "lcd_lock_dir", "sound_hook"):
+    for name in ("scan_file", "queue_dir", "log_file", "event_log", "status_file", "lcd_lock_dir", "mode_cards_dir", "sound_hook"):
         value = getattr(args, name)
         if isinstance(value, Path):
             setattr(args, name, value.expanduser())

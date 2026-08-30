@@ -38,13 +38,35 @@ Snapshot date: 2026-07-28.
 
 | Unit | Current role | Rebuild note |
 | --- | --- | --- |
-| `rfid-scan-publisher.service` | Active and enabled system service. | Owns the RC522 hardware and writes `/home/arthe/.local/state/rfid-mode/rfid-scan.json`. |
-| `rfid-mode-runner.service` | Active and enabled user service. | Runs local scripts from `/home/arthe/.config/rfid-modes/cards`. |
+| `rfid-scan-publisher.service` | Active and enabled system service. | Owns the RC522 hardware, writes the latest status snapshot, and commits card-presence events to a durable FIFO queue. |
+| `rfid-mode-runner.service` | Active and enabled user service. | Consumes one queued card command at a time and runs local scripts from `/home/arthe/.config/rfid-modes/cards`. |
 | `rfid-replicant.service` | Installed but inactive and disabled. | Legacy suite-backed scanner path; do not enable while the standalone publisher owns the reader. |
 
 The promoted scan publisher defaults to SPI bus 0, SPI device 0, BCM GPIO mode,
 and reset pin BCM GPIO25. The hardware manual still requires a physical check
 that the installed reader wiring matches those software defaults.
+
+## Scan Gesture and Queue
+
+Initial detection plays the normal scan beep and briefly shows the normalized
+RFID plus its mapped command label on the LCD. That display stays unchanged
+while the card is held. Removing the card before six seconds commits its
+command to `/home/arthe/.local/state/rfid-mode/queue/pending/`. Holding it for
+six seconds starts a deep read only for mappings declaring
+`RFID_MODE_QUEUE_DEEP_DATA=1`; the publisher emits the configured deep-read
+beep once per second and commits that command when the read finishes, even if
+the deep read has no usable data. All other mappings queue on removal. The queue commit plays its own acknowledgement
+sound and releases the RFID LCD event so the command can own the display.
+
+The runner atomically claims the oldest pending record and does not claim the
+next one until the active command exits. Incomplete claimed records are returned
+to pending after a runner restart; commands should therefore remain idempotent.
+
+New command cards are queue-first one-shots. Register `--interrupt` only for
+control actions that must preempt work; `--clear-queue` also cancels a pending
+queue-aware gadget arm. `--consume-next-seconds N` lets a card intentionally
+consume the next queued command. Use `rfid-queue-status` for UID-safe counts,
+active command labels, waiting interrupts, and gadget-arm state.
 
 ## Physical Steps
 
@@ -81,6 +103,7 @@ sudo install -d -m 0755 /usr/local/libexec/gway-home-tools /usr/local/bin
 install -m 0755 scripts/gway/rfid_scan_publisher.py "$HOME/.local/bin/rfid-scan-publisher"
 install -m 0755 scripts/gway/rfid_mode_runner.py "$HOME/.local/bin/rfid-mode-runner"
 install -m 0755 scripts/gway/rfid_mode_register.py "$HOME/.local/bin/rfid-mode-register"
+install -m 0755 scripts/gway/rfid_queue_status.py "$HOME/.local/bin/rfid-queue-status"
 ln -sfn "$HOME/.local/bin/rfid-mode-register" "$HOME/.local/bin/rfid-register"
 install -m 0755 scripts/gway/rfid_clear_current.py "$HOME/.local/bin/rfid-clear-current"
 install -m 0755 scripts/gway/rfid_arm_next_script.py "$HOME/.local/bin/rfid-arm-next-script"
@@ -113,6 +136,8 @@ Install system and user services:
 ```bash
 sudo install -m 0644 config/systemd/gway/rfid/rfid-scan-publisher.service \
   /etc/systemd/system/rfid-scan-publisher.service
+sudo install -D -m 0644 config/systemd/gway/rfid/rfid-scan-publisher.service.d/deep-read-hold.conf \
+  /etc/systemd/system/rfid-scan-publisher.service.d/deep-read-hold.conf
 sudo install -m 0644 config/systemd/gway/rfid/rfid-replicant.service \
   /etc/systemd/system/rfid-replicant.service
 
@@ -150,6 +175,7 @@ systemctl --user status rfid-mode-runner.service --no-pager
 rfid-register --list
 rfid-mode-runner --status
 cat /home/arthe/.local/state/rfid-mode/rfid-scan-publisher.json
+find /home/arthe/.local/state/rfid-mode/queue -maxdepth 2 -type f
 ```
 
 One-card reader check with a non-private test card:
@@ -181,8 +207,8 @@ Expected rebuild signals:
   group access.
 - `rfid-scan-publisher.service` is active and writes fresh status when a test
   card is scanned.
-- `rfid-mode-runner.service` is active and can process the scan file in
-  dry-run mode.
+- `rfid-mode-runner.service` is active and consumes queued records one at a
+  time.
 - `rfid-register --list` reads the card tree without exposing private card IDs
   in public output.
 ## Safety Notes

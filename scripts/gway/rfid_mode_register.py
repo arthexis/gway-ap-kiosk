@@ -113,13 +113,28 @@ def current_card(path: Path) -> str:
     return card_id
 
 
-def write_command_script(path: Path, command: str, label: str) -> None:
+def write_command_script(
+    path: Path,
+    command: str,
+    label: str,
+    *,
+    directives: list[str] | None = None,
+    clear_queue: bool = False,
+) -> None:
     quoted = shlex.quote(command)
+    policy_lines = "".join(f"# {directive}\n" for directive in directives or [])
+    clear_line = (
+        "/home/arthe/.local/bin/rfid-mode-runner --request-queue-clear --reason card_clear\n"
+        if clear_queue
+        else ""
+    )
     path.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         f"# RFID mode: {label}\n"
-        f"exec bash -lc {quoted}\n",
+        + policy_lines
+        + clear_line
+        + f"exec bash -lc {quoted}\n",
         encoding="utf-8",
     )
 
@@ -267,7 +282,19 @@ def list_cards(config_dir: Path) -> None:
         print("No RFID transition paths registered yet.")
         return
     for marker, label, path in rows:
-        print(f"{marker} {label}\t{path}")
+        policy: list[str] = []
+        if path.is_file():
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            if "RFID_MODE_QUEUE_INTERRUPT=1" in text:
+                policy.append("interrupt")
+            if "RFID_MODE_QUEUE_DEEP_DATA=1" in text:
+                policy.append("deep-data")
+            if "RFID_MODE_QUEUE_CONSUME_NEXT" in text:
+                policy.append("consume-next")
+            if "--request-queue-clear" in text:
+                policy.append("clear-queue")
+        suffix = f" [{', '.join(policy)}]" if policy else ""
+        print(f"{marker} {label}{suffix}\t{path}")
 
 
 def parse_args() -> argparse.Namespace:
@@ -285,6 +312,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dir", action="store_true", help="create a directory transition")
     parser.add_argument("--hold", action="store_true", help="register hold.sh/hold.py in the target directory")
     parser.add_argument("--new", action="store_true", help="register new.sh/new.py in the target directory")
+    parser.add_argument("--interrupt", action="store_true", help="queue this command as an interrupt that stops active work and runs next")
+    parser.add_argument("--deep-data", action="store_true", help="request deep-read context before this command is queued")
+    parser.add_argument("--consume-next-seconds", type=int, metavar="SECONDS", help="allow this command to consume the next queued card within SECONDS")
+    parser.add_argument("--clear-queue", action="store_true", help="make this an interrupt that clears queued work when it runs")
     parser.add_argument("--force", action="store_true", help="overwrite an existing script or accept existing directory")
     parser.add_argument("--list", action="store_true", help="list registered transition paths")
     return parser.parse_args()
@@ -332,6 +363,15 @@ def main() -> int:
         raise SystemExit("choose only one of --hold or --new")
     if (args.hold or args.new) and not script_mode:
         raise SystemExit("--hold/--new requires --script or --command")
+    policy_requested = args.interrupt or args.deep_data or args.consume_next_seconds is not None or args.clear_queue
+    if policy_requested and args.script:
+        raise SystemExit("queue policy options currently require --command so directives can be written safely")
+    if policy_requested and not args.command:
+        raise SystemExit("queue policy options require --command")
+    if policy_requested and (args.hold or args.new):
+        raise SystemExit("queue policy options cannot be combined with --hold or --new")
+    if args.consume_next_seconds is not None and args.consume_next_seconds <= 0:
+        raise SystemExit("--consume-next-seconds must be greater than zero")
 
     if script_mode:
         if args.hold:
@@ -350,7 +390,20 @@ def main() -> int:
                 raise SystemExit(f"script not found: {args.script}")
             shutil.copyfile(args.script, target)
         else:
-            write_command_script(target, args.command or "", args.label)
+            directives: list[str] = []
+            if args.interrupt or args.clear_queue:
+                directives.append("RFID_MODE_QUEUE_INTERRUPT=1")
+            if args.deep_data:
+                directives.append("RFID_MODE_QUEUE_DEEP_DATA=1")
+            if args.consume_next_seconds is not None:
+                directives.append(f"RFID_MODE_QUEUE_CONSUME_NEXT_SECONDS={args.consume_next_seconds}")
+            write_command_script(
+                target,
+                args.command or "",
+                args.label,
+                directives=directives,
+                clear_queue=args.clear_queue,
+            )
         target.chmod(target.stat().st_mode | 0o700)
         print(f"Registered RFID script {'/'.join(path_parts)}: {target}")
     else:

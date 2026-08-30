@@ -35,6 +35,7 @@ from typing import Any
 
 DEFAULT_CONFIG_DIR = Path.home() / ".config" / "rfid-modes"
 LOCAL_SCAN_FILE = Path.home() / ".local" / "state" / "rfid-mode" / "rfid-scan.json"
+LOCAL_QUEUE_DIR = LOCAL_SCAN_FILE.parent / "queue"
 LEGACY_ARTHEXIS_SCAN_FILE = Path("/home/arthe/arthexis/.locks/rfid-scan.json")
 LOCAL_LCD_LOCK_DIR = Path.home() / ".local" / "state" / "lcd-lockfiles"
 LEGACY_LCD_LOCK_DIR = Path("/home/arthe/arthexis/.locks")
@@ -55,12 +56,24 @@ PREEMPT_ACTION_RE = re.compile(
     r"^\s*#\s*RFID_MODE_PREEMPT_ACTION\s*=\s*(?:1|true|yes)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
+QUEUE_INTERRUPT_RE = re.compile(
+    r"^\s*#\s*RFID_MODE_QUEUE_INTERRUPT\s*=\s*(?:1|true|yes)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+QUEUE_CONSUME_NEXT_RE = re.compile(
+    r"^\s*#\s*RFID_MODE_QUEUE_CONSUME_NEXT(?:_SECONDS)?\s*=\s*([0-9]+|true|yes)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 STATEFUL_MODE_RE = re.compile(
     r"^\s*#\s*RFID_MODE_STATEFUL\s*=\s*(?:1|true|yes)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 RESET_NAVIGATION_ON_EXIT_RE = re.compile(
     r"^\s*#\s*RFID_MODE_RESET_NAVIGATION_ON_EXIT\s*=\s*(?:1|true|yes)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+RELEASE_LCD_EVENTS_RE = re.compile(
+    r"^\s*#\s*RFID_MODE_RELEASE_LCD_EVENTS\s*=\s*([0-9][0-9,\s]*)\s*$",
     re.IGNORECASE | re.MULTILINE,
 )
 SCRIPT_SUFFIXES = ("", ".sh", ".py")
@@ -73,10 +86,12 @@ DEFAULT_HOLD_CONFIRM_SECONDS = 0.75
 DEFAULT_HOLD_FRESH_SECONDS = 5.0
 DEFAULT_ONE_SHOT_TIMEOUT = 30.0
 DEFAULT_LABEL_EVENT_SECONDS = 30
+DEFAULT_RELEASE_LCD_EVENT_IDS = (5,)
 NEW_SCRIPT_CONTINUE_EXIT = 75
 RFID_SERVICE_UNIT = os.environ.get("RFID_MODE_RFID_SERVICE_UNIT", "")
 LCD_SERVICE_UNIT = os.environ.get("RFID_MODE_LCD_SERVICE_UNIT", "")
 SOUND_HOOK = Path(os.path.expandvars(os.path.expanduser(os.environ.get("RFID_MODE_SOUND_HOOK", "/home/arthe/.local/bin/codex-sound-hook"))))
+GADGET_ARM = Path(os.path.expandvars(os.path.expanduser(os.environ.get("RFID_MODE_GADGET_ARM", "/home/arthe/.local/bin/gway-gadget-arm"))))
 RUN_SOUND = os.environ.get("RFID_MODE_SOUND_RUN", "attention")
 COPY_COMPLETE_SOUND = os.environ.get("RFID_MODE_SOUND_COPY_COMPLETE", "ok")
 FACTORY_KEY_BYTES = [0xFF] * 6
@@ -155,6 +170,20 @@ def parse_iso_datetime(raw: Any) -> datetime | None:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
+
+
+def parse_lcd_event_ids(raw: str) -> tuple[int, ...]:
+    event_ids: list[int] = []
+    for part in re.split(r"[\s,]+", raw.strip()):
+        if not part:
+            continue
+        try:
+            event_id = int(part)
+        except ValueError:
+            continue
+        if event_id >= 0 and event_id not in event_ids:
+            event_ids.append(event_id)
+    return tuple(event_ids)
 
 
 def normalize_card_id(raw: Any) -> str:
@@ -262,6 +291,13 @@ class Scan:
 
 
 @dataclass
+class QueueItem:
+    path: Path
+    event_id: str
+    scan: Scan
+
+
+@dataclass
 class Resolution:
     action: str
     path: Path | None = None
@@ -280,8 +316,10 @@ class ModeRunner:
         hold_fresh_seconds: float = DEFAULT_HOLD_FRESH_SECONDS,
         one_shot_timeout: float = DEFAULT_ONE_SHOT_TIMEOUT,
         dry_run: bool = False,
+        queue_dir: Path | None = None,
     ) -> None:
         self.scan_file = scan_file
+        self.queue_dir = queue_dir or scan_file.parent / "queue"
         self.config_dir = config_dir
         self.cards_dir = config_dir / "cards"
         self.state_dir = config_dir / "state"
@@ -296,6 +334,7 @@ class ModeRunner:
         self.one_shot_timeout = one_shot_timeout
         self.dry_run = dry_run
         self.current_proc: subprocess.Popen[str] | None = None
+        self.queue_active: QueueItem | None = None
         self.state: dict[str, Any] = {}
         self.running = True
 
@@ -307,6 +346,7 @@ class ModeRunner:
         if "state_path" not in self.state:
             self.write_state(state_path=[], state_dir=str(self.cards_dir))
         self._clear_dead_stored_process()
+        self.recover_queue()
 
     def log(self, event: str, **fields: Any) -> None:
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -381,8 +421,7 @@ class ModeRunner:
             )
         self.write_state(**updates)
 
-    def read_scan(self) -> Scan | None:
-        payload = read_json(self.scan_file)
+    def scan_from_payload(self, payload: dict[str, Any]) -> Scan | None:
         if not payload:
             return None
         card_id = normalize_card_id(
@@ -394,8 +433,223 @@ class ModeRunner:
         if not card_id:
             return None
         scanned_at = str(payload.get("scanned_at") or payload.get("timestamp") or "")
-        key = f"{card_id}|{scanned_at or self.scan_file.stat().st_mtime_ns}"
+        queue_event_id = str(payload.get("queue_event_id") or "")
+        key = f"{queue_event_id}|{card_id}" if queue_event_id else f"{card_id}|{scanned_at or self.scan_file.stat().st_mtime_ns}"
         return Scan(card_id=card_id, scanned_at=scanned_at, key=key, payload=payload)
+
+    def read_scan(self) -> Scan | None:
+        return self.scan_from_payload(read_json(self.scan_file) or {})
+
+    def queue_paths(self, state: str) -> Path:
+        return self.queue_dir / state
+
+    def recover_queue(self) -> None:
+        """Return incomplete work to FIFO pending state after a runner restart."""
+        active_name = str(self.state.get("queue_active_file") or "")
+        active_path = self.queue_paths("processing") / active_name if active_name else None
+        if active_path is not None and active_path.is_file() and self.current_is_alive():
+            item = self.read_queue_item(active_path)
+            if item is not None:
+                self.queue_active = item
+                return
+        for path in sorted(self.queue_paths("processing").glob("*.json")):
+            target = self.queue_paths("pending") / path.name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                path.replace(target)
+                self.log("queue_recovered", event_file=path.name)
+            except OSError as exc:
+                self.log("queue_recover_failed", event_file=path.name, error=str(exc))
+        if active_name:
+            self.write_state(queue_active_file=None, queue_active_event_id=None)
+
+    def read_queue_item(self, path: Path) -> QueueItem | None:
+        record = read_json(path)
+        if not isinstance(record, dict):
+            return None
+        payload = record.get("scan")
+        if not isinstance(payload, dict):
+            return None
+        payload = dict(payload)
+        context = self.queue_paths("context") / path.name
+        try:
+            atomic_write_json(context, payload)
+        except OSError as exc:
+            self.log("queue_context_write_failed", event_file=path.name, error=str(exc))
+            return None
+        payload["_queue_snapshot_file"] = str(context)
+        scan = self.scan_from_payload(payload)
+        if scan is None:
+            return None
+        event_id = str(record.get("event_id") or payload.get("queue_event_id") or path.stem)
+        return QueueItem(path=path, event_id=event_id, scan=scan)
+
+    def scan_file_for(self, scan: Scan) -> Path:
+        raw = str(scan.payload.get("_queue_snapshot_file") or "")
+        return Path(raw) if raw else self.scan_file
+
+    def claim_next_queue_item(self, state: str = "pending") -> QueueItem | None:
+        pending = self.queue_paths(state)
+        processing = self.queue_paths("processing")
+        processing.mkdir(parents=True, exist_ok=True)
+        for path in sorted(pending.glob("*.json")):
+            claimed = processing / path.name
+            try:
+                path.replace(claimed)
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                self.log("queue_claim_failed", event_file=path.name, error=str(exc))
+                continue
+            item = self.read_queue_item(claimed)
+            if item is not None:
+                self.log("queue_claimed", event_id=item.event_id, card_id=item.scan.card_id)
+                return item
+            failed = self.queue_paths("failed") / claimed.name
+            failed.parent.mkdir(parents=True, exist_ok=True)
+            claimed.replace(failed)
+            self.log("queue_invalid", event_file=claimed.name)
+        return None
+
+    def scan_is_interrupt(self, scan: Scan) -> bool:
+        for suffix in SCRIPT_SUFFIXES:
+            script = self.cards_dir / f"{scan.card_id}{suffix}"
+            if not script.is_file():
+                continue
+            try:
+                if QUEUE_INTERRUPT_RE.search(script.read_text(encoding="utf-8", errors="ignore")):
+                    return True
+            except OSError:
+                continue
+        return False
+
+    def clear_pending_queue(self, *, except_name: str = "") -> None:
+        cleared = self.queue_paths("cleared")
+        cleared.mkdir(parents=True, exist_ok=True)
+        for path in sorted(self.queue_paths("pending").glob("*.json")):
+            if path.name == except_name:
+                continue
+            try:
+                path.replace(cleared / path.name)
+            except OSError as exc:
+                self.log("queue_clear_failed", event_file=path.name, error=str(exc))
+        self.log("queue_cleared")
+
+    def request_queue_clear(self, reason: str) -> None:
+        control = self.queue_paths("control")
+        request = control / f"clear-{time.time_ns()}-{os.getpid()}.json"
+        atomic_write_json(request, {"requested_at": now_iso(), "reason": reason})
+
+    def clear_gadget_arm(self, *, reason: str) -> None:
+        """Clear pending gadget mode along with an explicit queue clear.
+
+        This includes the queue-aware five-minute flag and its LCD high lock;
+        the helper remains the single owner of the gadget-state contract.
+        """
+        if not GADGET_ARM.is_file():
+            self.log("gadget_clear_skipped", reason=reason, error="gadget_arm_not_found")
+            return
+        try:
+            result = subprocess.run(
+                [str(GADGET_ARM), "--cancel"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self.log("gadget_clear_failed", reason=reason, error=str(exc))
+            return
+        self.log("gadget_cleared" if result.returncode == 0 else "gadget_clear_failed", reason=reason, returncode=result.returncode)
+
+    def process_queue_controls(self) -> None:
+        for request in sorted(self.queue_paths("control").glob("clear-*.json")):
+            payload = read_json(request) or {}
+            self.clear_pending_queue()
+            self.clear_gadget_arm(reason=str(payload.get("reason") or "unspecified"))
+            try:
+                request.unlink()
+            except OSError as exc:
+                self.log("queue_control_remove_failed", request=str(request), error=str(exc))
+                continue
+            self.log("queue_control_processed", reason=str(payload.get("reason") or "unspecified"))
+
+    def complete_queue_item(self, item: QueueItem, outcome: str = "done") -> None:
+        destination = self.queue_paths(outcome) / item.path.name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            item.path.replace(destination)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            self.log("queue_complete_failed", event_id=item.event_id, error=str(exc))
+            return
+        self.log("queue_completed", event_id=item.event_id, card_id=item.scan.card_id, outcome=outcome)
+        self.queue_active = None
+        try:
+            self.scan_file_for(item.scan).unlink(missing_ok=True)
+        except OSError:
+            pass
+        self.write_state(queue_active_file=None, queue_active_event_id=None)
+
+    def process_queue(self) -> None:
+        self.process_queue_controls()
+        interrupt = self.claim_next_queue_item("interrupt")
+        if interrupt is not None:
+            if self.queue_active is not None:
+                self.stop_current("queue_interrupt", next_card=interrupt.scan.card_id)
+                self.complete_queue_item(self.queue_active, "interrupted")
+            elif self.current_is_alive():
+                self.stop_current("queue_interrupt", next_card=interrupt.scan.card_id)
+            self.clear_pending_queue()
+            self.queue_active = interrupt
+            self.write_state(queue_active_file=interrupt.path.name, queue_active_event_id=interrupt.event_id)
+            try:
+                self.handle_scan(interrupt.scan)
+            except Exception as exc:
+                self.log("queue_interrupt_failed", event_id=interrupt.event_id, error=str(exc))
+                self.complete_queue_item(interrupt, "failed")
+                return
+            if not self.current_is_alive():
+                self.complete_queue_item(interrupt)
+            return
+        if self.queue_active is not None:
+            if not self.current_is_alive():
+                self.complete_queue_item(self.queue_active)
+            return
+        if self.current_is_alive():
+            return
+        item = self.claim_next_queue_item()
+        if item is None:
+            return
+        handler_raw = str(self.state.get("queue_next_handler") or "")
+        handler_until = float(self.state.get("queue_next_handler_until") or 0)
+        if handler_raw and time.time() <= handler_until and Path(handler_raw).is_file():
+            handler = Path(handler_raw)
+            self.queue_active = item
+            self.write_state(queue_active_file=item.path.name, queue_active_event_id=item.event_id)
+            self.log("queue_next_consumed", event_id=item.event_id, card_id=item.scan.card_id, handler=str(handler))
+            try:
+                self.run_one_shot_script(item.scan, handler, handler.parent, [handler.parent.name])
+            except Exception as exc:
+                self.log("queue_next_handler_failed", event_id=item.event_id, error=str(exc))
+                self.complete_queue_item(item, "failed")
+            else:
+                self.complete_queue_item(item)
+            self.write_state(queue_next_handler=None, queue_next_handler_level=None, queue_next_handler_until=None)
+            return
+        if handler_raw:
+            self.write_state(queue_next_handler=None, queue_next_handler_level=None, queue_next_handler_until=None)
+        self.queue_active = item
+        self.write_state(queue_active_file=item.path.name, queue_active_event_id=item.event_id)
+        try:
+            self.handle_scan(item.scan)
+        except Exception as exc:
+            self.log("queue_dispatch_failed", event_id=item.event_id, card_id=item.scan.card_id, error=str(exc))
+            self.complete_queue_item(item, "failed")
+            return
+        if not self.current_is_alive():
+            self.complete_queue_item(item)
 
     def script_candidates(self, level: Path, card_id: str) -> list[Path]:
         candidates = [level / f"{card_id}{suffix}" for suffix in SCRIPT_SUFFIXES]
@@ -422,6 +676,20 @@ class ModeRunner:
             return False
         return bool(RESET_NAVIGATION_ON_EXIT_RE.search(text))
 
+    def script_release_lcd_event_ids(self, script: Path | None) -> tuple[int, ...]:
+        event_ids = list(DEFAULT_RELEASE_LCD_EVENT_IDS)
+        if script is not None:
+            try:
+                text = script.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                text = ""
+            match = RELEASE_LCD_EVENTS_RE.search(text)
+            if match:
+                for event_id in parse_lcd_event_ids(match.group(1)):
+                    if event_id not in event_ids:
+                        event_ids.append(event_id)
+        return tuple(event_ids)
+
     def script_is_stateful_mode(self, script: Path) -> bool:
         try:
             text = script.read_text(encoding="utf-8", errors="ignore")
@@ -439,6 +707,16 @@ class ModeRunner:
         except OSError:
             return False
         return bool(PREEMPT_ACTION_RE.search(text))
+
+    def script_queue_consume_next_seconds(self, script: Path) -> int:
+        try:
+            match = QUEUE_CONSUME_NEXT_RE.search(script.read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            return 0
+        if match is None:
+            return 0
+        value = match.group(1).lower()
+        return int(value) if value.isdigit() else 45
 
     def run_preempt_action(
         self, scan: Scan, script: Path, level: Path, path_parts: list[str]
@@ -464,7 +742,7 @@ class ModeRunner:
             {
                 "RFID_MODE_CARD_ID": scan.card_id,
                 "RFID_MODE_SCANNED_AT": scan.scanned_at,
-                "RFID_MODE_SCAN_FILE": str(self.scan_file),
+                "RFID_MODE_SCAN_FILE": str(self.scan_file_for(scan)),
                 "RFID_MODE_LOCK_DIR": str(self.scan_file.parent),
                 "RFID_MODE_LCD_LOCK_DIR": str(self.lcd_lock_dir()),
                 "RFID_MODE_SCRIPT": str(script),
@@ -578,6 +856,31 @@ class ModeRunner:
             os.kill(pid, signal.SIGUSR1)
         except OSError as exc:
             self.log("lcd_signal_failed", pid=pid, error=str(exc))
+
+    def release_lcd_events_for_script(self, script: str, reason: str) -> None:
+        if self.dry_run:
+            return
+        event_ids = self.script_release_lcd_event_ids(Path(script) if script else None)
+        released: list[int] = []
+        for event_id in event_ids:
+            path = self.lcd_lock_dir() / f"lcd-event-{event_id}.lck"
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                self.log(
+                    "lcd_event_release_failed",
+                    event_id=event_id,
+                    path=str(path),
+                    reason=reason,
+                    error=str(exc),
+                )
+                continue
+            released.append(event_id)
+        if released:
+            self.signal_lcd_service()
+            self.log("lcd_event_released", event_ids=released, script=script, reason=reason)
 
     def send_lcd_label_event(
         self,
@@ -960,6 +1263,7 @@ except Exception as exc:
                     presence_id=current_presence_id,
                 )
             self.write_state(**updates)
+            self.release_lcd_events_for_script(current_script, "stale_process")
 
     def current_is_alive(self) -> bool:
         if self.current_proc is not None:
@@ -1018,6 +1322,7 @@ except Exception as exc:
                 presence_id=current_presence_id,
             )
         self.write_state(**updates)
+        self.release_lcd_events_for_script(current_script, "mode_exit")
 
     def stop_current(self, reason: str, next_card: str | None = None) -> None:
         pid = int(self.state.get("pid") or 0)
@@ -1036,6 +1341,7 @@ except Exception as exc:
                     hold_script=None,
                     hold_presence_id=None,
                 )
+                self.release_lcd_events_for_script(script, reason)
             return
         if not self.process_alive_matches_state():
             self.log("mode_stop_skipped_stale_pid", pid=pid, script=script, reason=reason)
@@ -1070,6 +1376,7 @@ except Exception as exc:
                     presence_id=str(self.state.get("current_presence_id") or ""),
                 )
             self.write_state(**updates)
+            self.release_lcd_events_for_script(script, reason)
             return
 
         self.log(
@@ -1108,6 +1415,7 @@ except Exception as exc:
             hold_script=None,
             hold_presence_id=None,
         )
+        self.release_lcd_events_for_script(script, reason)
 
     def start_mode(
         self,
@@ -1124,6 +1432,15 @@ except Exception as exc:
         state_level = next_level or level
         state_path_parts = next_path_parts or path_parts
         mode_path_parts = next_path_parts or (path_parts + [scan.card_id])
+        consume_seconds = self.script_queue_consume_next_seconds(script)
+        consume_handler = level / scan.card_id / "new.sh"
+        consume_updates: dict[str, Any] = {}
+        if consume_seconds and consume_handler.is_file():
+            consume_updates = {
+                "queue_next_handler": str(consume_handler),
+                "queue_next_handler_level": str(consume_handler.parent),
+                "queue_next_handler_until": time.time() + consume_seconds,
+            }
         if not self.script_is_runnable(script):
             self.log("script_not_executable", card_id=scan.card_id, script=str(script))
             self.write_state(
@@ -1151,6 +1468,7 @@ except Exception as exc:
             }
             if extra_state:
                 updates.update(extra_state)
+            updates.update(consume_updates)
             self.write_state(**updates)
             return
 
@@ -1166,7 +1484,7 @@ except Exception as exc:
             {
                 "RFID_MODE_CARD_ID": scan.card_id,
                 "RFID_MODE_SCANNED_AT": scan.scanned_at,
-                "RFID_MODE_SCAN_FILE": str(self.scan_file),
+                "RFID_MODE_SCAN_FILE": str(self.scan_file_for(scan)),
                 "RFID_MODE_LOCK_DIR": str(self.scan_file.parent),
                 "RFID_MODE_LCD_LOCK_DIR": str(self.lcd_lock_dir()),
                 "RFID_MODE_SCRIPT": str(script),
@@ -1212,6 +1530,7 @@ except Exception as exc:
             }
             if extra_state:
                 updates.update(extra_state)
+            updates.update(consume_updates)
             self.write_state(**updates)
             return
 
@@ -1251,6 +1570,7 @@ except Exception as exc:
         }
         if extra_state:
             updates.update(extra_state)
+        updates.update(consume_updates)
         self.write_state(**updates)
 
     def scan_presence_id(self, scan: Scan) -> str:
@@ -1427,16 +1747,10 @@ except Exception as exc:
         }
 
     def new_script_hold_is_armed(self, script: Path, path_parts: list[str]) -> bool:
-        if not self.new_script_requires_hold(script):
-            return True
-        state_path = "/".join(path_parts)
-        return (
-            bool(path_parts)
-            and self.state.get("new_hold_armed_card") == path_parts[-1]
-            and self.state.get("new_hold_armed_state_path") == state_path
-            and self.state.get("new_hold_armed_script") == str(script)
-            and bool(self.state.get("new_hold_armed_presence_id"))
-        )
+        del script, path_parts
+        # Queue ordering replaces reader-presence arming.  A next-card handler
+        # must never depend on a card still being physically on the RC522.
+        return True
 
     def log_new_script_hold_required_unarmed(self, scan: Scan, script: Path, path_parts: list[str]) -> None:
         state_path = "/".join(path_parts)
@@ -1722,7 +2036,7 @@ except Exception as exc:
             {
                 "RFID_MODE_CARD_ID": scan.card_id,
                 "RFID_MODE_SCANNED_AT": scan.scanned_at,
-                "RFID_MODE_SCAN_FILE": str(self.scan_file),
+                "RFID_MODE_SCAN_FILE": str(self.scan_file_for(scan)),
                 "RFID_MODE_LOCK_DIR": str(self.scan_file.parent),
                 "RFID_MODE_LCD_LOCK_DIR": str(self.lcd_lock_dir()),
                 "RFID_MODE_SCRIPT": str(script),
@@ -1948,21 +2262,14 @@ except Exception as exc:
             return False
         if self.hold_already_triggered(script, scan, path_parts):
             return False
-        if not self.scan_is_present(scan) or not self.scan_is_fully_read(scan) or not self.scan_is_fresh(scan):
-            return False
-
-        confirmed = self.confirm_resting_scan(scan, level, path_parts, "hold")
-        if confirmed is None:
-            return False
-
         self.log(
-            "hold_start_confirmed",
-            card_id=confirmed.card_id,
+            "hold_start_queued",
+            card_id=scan.card_id,
             script=str(script),
             state_path=path_parts,
-            scan_key=confirmed.key,
+            scan_key=scan.key,
         )
-        self.start_hold(confirmed, script, level, path_parts)
+        self.start_hold(scan, script, level, path_parts)
         return True
 
     def handle_scan(self, scan: Scan) -> None:
@@ -2130,12 +2437,16 @@ except Exception as exc:
 
     def run_once(self) -> int:
         self.setup()
-        scan = self.read_scan()
-        if scan is None:
-            self.log("scan_missing_or_invalid", scan_file=str(self.scan_file))
+        item = self.claim_next_queue_item()
+        if item is None:
+            self.log("queue_missing_or_invalid", queue_dir=str(self.queue_dir))
             return 1
-        self.handle_scan(scan)
+        self.queue_active = item
+        self.write_state(queue_active_file=item.path.name, queue_active_event_id=item.event_id)
+        self.handle_scan(item.scan)
         self.reap_current_if_exited()
+        if not self.current_is_alive() and self.queue_active is not None:
+            self.complete_queue_item(self.queue_active)
         return 0
 
     def run_forever(self) -> int:
@@ -2147,12 +2458,10 @@ except Exception as exc:
 
         signal.signal(signal.SIGTERM, _stop)
         signal.signal(signal.SIGINT, _stop)
-        self.log("runner_start", scan_file=str(self.scan_file), config_dir=str(self.config_dir))
+        self.log("runner_start", scan_file=str(self.scan_file), queue_dir=str(self.queue_dir), config_dir=str(self.config_dir))
         while self.running:
             self.reap_current_if_exited()
-            scan = self.read_scan()
-            if scan is not None:
-                self.handle_scan(scan)
+            self.process_queue()
             time.sleep(self.poll_seconds)
         self.log("runner_stop")
         return 0
@@ -2161,6 +2470,7 @@ except Exception as exc:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run local modes from RFID transition paths.")
     parser.add_argument("--scan-file", type=Path, default=DEFAULT_SCAN_FILE)
+    parser.add_argument("--queue-dir", type=Path, default=expand_path(os.environ.get("RFID_MODE_QUEUE_DIR", LOCAL_QUEUE_DIR)))
     parser.add_argument("--config-dir", type=Path, default=DEFAULT_CONFIG_DIR)
     parser.add_argument("--poll-seconds", type=float, default=0.35)
     parser.add_argument("--stop-timeout", type=float, default=5.0)
@@ -2171,6 +2481,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="log actions without starting/stopping scripts")
     parser.add_argument("--status", action="store_true", help="print current runner state")
     parser.add_argument("--stop-current", action="store_true", help="stop the current mode process")
+    parser.add_argument("--request-queue-clear", action="store_true", help="request that the active queue worker clears pending cards")
+    parser.add_argument("--reason", default="manual", help="reason recorded with a queue control request")
     return parser.parse_args()
 
 
@@ -2178,6 +2490,7 @@ def main() -> int:
     args = parse_args()
     runner = ModeRunner(
         scan_file=args.scan_file,
+        queue_dir=args.queue_dir,
         config_dir=args.config_dir,
         poll_seconds=args.poll_seconds,
         stop_timeout=args.stop_timeout,
@@ -2192,6 +2505,9 @@ def main() -> int:
         return 0
     if args.stop_current:
         runner.stop_current("manual_stop")
+        return 0
+    if args.request_queue_clear:
+        runner.request_queue_clear(args.reason)
         return 0
     if args.once:
         return runner.run_once()

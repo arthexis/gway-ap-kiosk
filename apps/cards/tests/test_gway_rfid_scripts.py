@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,23 @@ def test_mode_register_uses_sidecar_for_existing_directory(tmp_path):
     assert mode_register.validate_script_target(root, ["FIRST_CARD"], False, ".sh") == root / "FIRST_CARD.sh"
     with pytest.raises(SystemExit, match="top-level scripts are not allowed"):
         mode_register.validate_script_target(root, ["NEW_CARD"], False, ".sh")
+
+
+def test_mode_register_writes_queue_policy_directives(tmp_path):
+    target = tmp_path / "CARD.sh"
+
+    mode_register.write_command_script(
+        target,
+        "echo ok",
+        "QUEUE ACTION",
+        directives=["RFID_MODE_QUEUE_INTERRUPT=1", "RFID_MODE_QUEUE_CONSUME_NEXT_SECONDS=45"],
+        clear_queue=True,
+    )
+
+    text = target.read_text(encoding="utf-8")
+    assert "RFID_MODE_QUEUE_INTERRUPT=1" in text
+    assert "RFID_MODE_QUEUE_CONSUME_NEXT_SECONDS=45" in text
+    assert "--request-queue-clear" in text
 
 
 def test_scan_publisher_normalizes_payload_and_redacts_keys_from_log():
@@ -172,3 +190,127 @@ def test_top_level_sidecar_can_opt_into_stateful_mode(tmp_path):
 
     assert resolution.action == "execute_and_navigate"
     assert resolution.next_path == card_dir
+
+
+def test_stopping_current_mode_releases_running_lcd_event(monkeypatch, tmp_path):
+    config_dir = tmp_path / "rfid-modes"
+    lcd_dir = tmp_path / "lcd"
+    lcd_dir.mkdir()
+    monkeypatch.setattr(mode_runner, "DEFAULT_LCD_LOCK_DIR", lcd_dir)
+
+    runner = mode_runner.ModeRunner(
+        scan_file=tmp_path / "scan.json",
+        config_dir=config_dir,
+        poll_seconds=0.1,
+        stop_timeout=0.5,
+    )
+    runner.setup()
+    script = config_dir / "cards" / "EXAMINE.sh"
+    script.write_text("#!/usr/bin/env bash\nsleep 30\n", encoding="utf-8")
+    script.chmod(0o755)
+    process = subprocess.Popen([str(script)], start_new_session=True)
+    runner.current_proc = process
+    runner.write_state(
+        current_card="EXAMINE",
+        current_script=str(script),
+        current_mode_kind="mode",
+        current_presence_id="EXAMINE|now",
+        pid=process.pid,
+        mode_started_at=mode_runner.now_iso(),
+        mode_log=str(tmp_path / "mode.log"),
+    )
+    running_event = lcd_dir / "lcd-event-5.lck"
+    running_event.write_text("EXAMINE\nEVIDENCE\n2099-01-01T00:00:00+00:00\n", encoding="utf-8")
+
+    try:
+        runner.stop_current("mode_switch", next_card="REVEAL")
+    finally:
+        try:
+            process.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=1)
+
+    assert not running_event.exists()
+    assert runner.state["current_card"] is None
+
+
+def test_queue_runs_one_card_action_at_a_time(tmp_path):
+    config_dir = tmp_path / "rfid-modes"
+    queue_dir = tmp_path / "queue"
+    cards_dir = config_dir / "cards"
+    for card in ("FIRST", "SECOND"):
+        (cards_dir / card).mkdir(parents=True)
+        script = cards_dir / f"{card}.sh"
+        script.write_text("#!/usr/bin/env bash\nsleep 0.15\n", encoding="utf-8")
+        script.chmod(0o755)
+    pending = queue_dir / "pending"
+    pending.mkdir(parents=True)
+    for number, card in enumerate(("FIRST", "SECOND"), start=1):
+        event_id = f"{number:020d}-{card}"
+        (pending / f"{event_id}.json").write_text(
+            json.dumps(
+                {
+                    "event_id": event_id,
+                    "scan": {"rfid": card, "scanned_at": f"t{number}", "queue_event_id": event_id},
+                }
+            ),
+            encoding="utf-8",
+        )
+    runner = mode_runner.ModeRunner(
+        scan_file=tmp_path / "scan.json",
+        queue_dir=queue_dir,
+        config_dir=config_dir,
+        poll_seconds=0.01,
+        stop_timeout=0.1,
+    )
+    runner.setup()
+
+    runner.process_queue()
+    assert runner.queue_active is not None
+    assert runner.queue_active.scan.card_id == "FIRST"
+    assert len(list(pending.glob("*.json"))) == 1
+    runner.process_queue()
+    assert runner.queue_active is not None
+    assert runner.queue_active.scan.card_id == "FIRST"
+
+    time.sleep(0.2)
+    runner.reap_current_if_exited()
+    runner.process_queue()
+    runner.process_queue()
+    assert runner.queue_active is not None
+    assert runner.queue_active.scan.card_id == "SECOND"
+    time.sleep(0.2)
+    runner.reap_current_if_exited()
+    runner.process_queue()
+    assert len(list((queue_dir / "done").glob("*.json"))) == 2
+
+
+def test_queue_clear_cancels_pending_gadget_arm(tmp_path, monkeypatch):
+    config_dir = tmp_path / "rfid-modes"
+    queue_dir = tmp_path / "queue"
+    gadget_arm = tmp_path / "gway-gadget-arm"
+    marker = tmp_path / "gadget-cancelled"
+    gadget_arm.write_text(f"#!/usr/bin/env bash\ntouch {marker}\n", encoding="utf-8")
+    gadget_arm.chmod(0o755)
+    monkeypatch.setattr(mode_runner, "GADGET_ARM", gadget_arm)
+    control = queue_dir / "control"
+    pending = queue_dir / "pending"
+    control.mkdir(parents=True)
+    pending.mkdir(parents=True)
+    (control / "clear-test.json").write_text(json.dumps({"reason": "test"}), encoding="utf-8")
+    (pending / "queued.json").write_text("{}", encoding="utf-8")
+    runner = mode_runner.ModeRunner(
+        scan_file=tmp_path / "scan.json",
+        queue_dir=queue_dir,
+        config_dir=config_dir,
+        poll_seconds=0.01,
+        stop_timeout=0.1,
+    )
+    runner.setup()
+
+    runner.process_queue_controls()
+
+    assert marker.exists()
+    assert not list(pending.glob("*.json"))
+    assert not list(control.glob("clear-*.json"))

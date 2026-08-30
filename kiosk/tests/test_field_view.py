@@ -191,7 +191,7 @@ def test_only_arthexis_and_lcd_services_render_restart_controls():
 
 
 def test_ap_reset_only_runs_the_maintained_reveal_command(monkeypatch, tmp_path):
-    reset_command = tmp_path / "prodigy-reveal-ap"
+    reset_command = tmp_path / "prodigy-ap-reveal"
     lcd_tool = tmp_path / "prodigy-password-lcd-60s"
     reset_command.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     lcd_tool.write_text("#!/usr/bin/env bash\n", encoding="utf-8")

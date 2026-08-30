@@ -41,7 +41,7 @@ DEFAULT_LCD_RUNNER_HISTORY_FILE = Path(
 DEFAULT_LCD_STANDBY_SCRIPT = Path(
     "/home/arthe/.local/state/lcd-lockfiles/lcd-rotation.script"
 )
-AP_RESET_COMMAND = Path("/home/arthe/gway-ap-kiosk/scripts/ap/prodigy-reveal-ap")
+AP_RESET_COMMAND = Path("/home/arthe/gway-ap-kiosk/scripts/ap/prodigy-ap-reveal")
 AP_RESET_LCD_TOOL = Path("/home/arthe/gway-ap-kiosk/scripts/ap/prodigy-password-lcd-60s")
 DEFAULT_CPU_TEMP_FILE = Path("/sys/class/thermal/thermal_zone0/temp")
 DEFAULT_OS_RELEASE_FILE = Path("/etc/os-release")

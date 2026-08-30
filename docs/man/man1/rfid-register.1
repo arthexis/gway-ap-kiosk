@@ -57,11 +57,26 @@ or
 .B new.py
 in the target directory.
 .TP
+.B --interrupt
+Mark a command as a queue interrupt. It preempts active work and runs before
+ordinary pending commands.
+.TP
+.B --deep-data
+Request deep-read context before this command is queued.
+.TP
+.BI "--consume-next-seconds " SECONDS
+Allow the command to consume the next queued card within SECONDS.
+.TP
+.B --clear-queue
+Create an interrupt command that requests queue clearing when it runs.
+.TP
 .B --list
-List registered transition paths.
+List registered transition paths and their queue policy markers.
 .SH EXAMPLES
 .nf
 /home/arthe/.local/bin/rfid-register --list
+/home/arthe/.local/bin/rfid-register --path FIRST_CARD --label 'mute' --interrupt --command 'toggle-mute'
+/home/arthe/.local/bin/rfid-register --path FIRST_CARD --label 'clear' --clear-queue --command 'true'
 /home/arthe/.local/bin/rfid-register --latest --dir
 /home/arthe/.local/bin/rfid-register --path FIRST_CARD --wait --label 'log scan' --command 'date >> /home/arthe/rfid-runs.log'
 /home/arthe/.local/bin/rfid-register --path FIRST_CARD/SECOND_CARD --script /home/arthe/bin/my-mode.sh

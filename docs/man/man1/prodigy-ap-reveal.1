@@ -1,22 +1,23 @@
-.TH PRODIGY-REVEAL-AP 1 "2026-08-13" "GWAY local tools" "User Commands"
+.TH PRODIGY-AP-REVEAL 1 "2026-08-29" "GWAY local tools" "User Commands"
 .SH NAME
-prodigy-reveal-ap \- rotate and show the PRODIGY AP password on the local LCD
+prodigy-ap-reveal \- rotate and show the local AP password
 .SH SYNOPSIS
-.B prodigy-reveal-ap
+.B prodigy-ap-reveal
 .RI [ --dry-run ]
 .SH DESCRIPTION
-.B prodigy-reveal-ap
-rotates the local PRODIGY AP password with
+.B prodigy-ap-reveal
+rotates the local AP password with
 .IR /usr/local/sbin/prodigy-ap-password ,
 reapplies the
 .B PRODIGY
-NetworkManager AP profile with
+NetworkManager AP profile, which broadcasts
+.B arthexis-1
+by default, with
 .IR /usr/local/bin/prodigy-nmcli ,
 and then displays the saved password on the local LCD using
 .IR prodigy-password-lcd-60s .
 .PP
-The command is intended for local RFID mode bindings on gway-001. It does not
-print the password to standard output.
+On success, the command prints the new password to standard output.
 .SH OPTIONS
 .TP
 .B --dry-run
@@ -39,6 +40,10 @@ Override the LCD password display helper. Defaults to
 .B PRODIGY_AP_PROFILE
 Override the NetworkManager connection profile. Defaults to
 .BR PRODIGY .
+.TP
+.B PRODIGY_AP_SSID
+Override the broadcast SSID. Defaults to
+.BR arthexis-1 .
 .SH SEE ALSO
 .BR prodigy-password-lcd-60s (1),
 .BR rfid-arm-next-script (1)

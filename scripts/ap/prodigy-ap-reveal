@@ -1,25 +1,41 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Rotate/reapply the local AP and print the new password.
 # RFID_MODE_RESET_NAVIGATION_ON_EXIT=1
 
 password_tool="${PRODIGY_AP_PASSWORD_TOOL:-/usr/local/sbin/prodigy-ap-password}"
 nmcli_tool="${PRODIGY_AP_NMCLI_TOOL:-/usr/local/bin/prodigy-nmcli}"
 lcd_tool="${PRODIGY_AP_LCD_TOOL:-/home/arthe/.local/bin/prodigy-password-lcd-60s}"
+password_file="${PRODIGY_AP_PASSWORD_PATH:-/home/arthe/ap-password.txt}"
 profile="${PRODIGY_AP_PROFILE:-PRODIGY}"
 dry_run=0
 
 usage() {
   cat <<'USAGE'
-Usage: prodigy-reveal-ap [--dry-run]
+Usage: prodigy-ap-reveal [--dry-run]
 
-Rotate the PRODIGY AP password, reapply the NetworkManager AP profile, then
-show the saved password on the local LCD using prodigy-password-lcd-60s.
+Rotate the local AP password, reapply the NetworkManager AP profile, then
+show the saved password on the local LCD and print it to standard output.
 USAGE
 }
 
 die() {
-  printf 'prodigy-reveal-ap: %s\n' "$*" >&2
+  printf 'prodigy-ap-reveal: %s\n' "$*" >&2
   exit 1
+}
+
+read_password() {
+  local key
+  local value
+
+  [[ -r "$password_file" ]] || die "password file is not readable: $password_file"
+  while IFS='=' read -r key value; do
+    if [[ "$key" == "PASSWORD" ]]; then
+      printf '%s\n' "$value"
+      return 0
+    fi
+  done <"$password_file"
+  die "password file has no PASSWORD entry"
 }
 
 while (($#)); do
@@ -39,18 +55,18 @@ while (($#)); do
 done
 
 [[ -x "$password_tool" ]] || die "password tool is not executable: $password_tool"
-[[ -x "$nmcli_tool" ]] || die "PRODIGY nmcli wrapper is not executable: $nmcli_tool"
+[[ -x "$nmcli_tool" ]] || die "AP nmcli wrapper is not executable: $nmcli_tool"
 [[ -x "$lcd_tool" ]] || die "LCD helper is not executable: $lcd_tool"
 
 if ((dry_run)); then
   sudo -n -l "$password_tool" >/dev/null
   sudo -n -l "$nmcli_tool" >/dev/null
   "$lcd_tool" --dry-run >/dev/null
-  printf '{"ok":true,"dry_run":true,"profile":"%s","action":"rotate,reapply,show_lcd"}\n' "$profile"
+  printf '{"ok":true,"dry_run":true,"profile":"%s","action":"rotate,reapply,show_lcd,print_password"}\n' "$profile"
   exit 0
 fi
 
 sudo -n "$password_tool" rotate >/dev/null
 sudo -n "$nmcli_tool" connection up "$profile" >/dev/null
 "$lcd_tool" >/dev/null
-printf '{"ok":true,"profile":"%s","action":"rotate,reapply,show_lcd"}\n' "$profile"
+read_password

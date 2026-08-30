@@ -16,7 +16,9 @@ Environment=RFID_SCAN_STATUS_FILE=/home/arthe/.local/state/rfid-mode/rfid-scan-p
 Environment=RFID_SCAN_LCD_LOCK_DIR=/home/arthe/.local/state/lcd-lockfiles
 Environment=RFID_SCAN_CARDS_FILE=/home/arthe/cards.txt
 Environment=RFID_SCAN_NORMAL_SOUND=notice
-Environment=RFID_SCAN_DEEP_SOUND=ok
+Environment=RFID_SCAN_DEEP_HOLD_SECONDS=6.0
+Environment=RFID_SCAN_QUEUED_SOUND=ok
+Environment=RFID_SCAN_DEEP_PROGRESS_SOUND=attention
 ExecStart=/home/arthe/.local/share/rfid-mode/.venv/bin/python /home/arthe/.local/bin/rfid-scan-publisher
 Restart=always
 RestartSec=2
