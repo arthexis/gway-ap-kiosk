@@ -26,6 +26,9 @@ from urllib.request import urlopen
 from zoneinfo import ZoneInfo
 
 
+AP_RESET_PATH = "/kiosk/status/ap/reset/"
+AP_ROTATE_COMMAND = Path("/home/arthe/.local/bin/prodigy-ap-rotate")
+
 DEFAULT_AP_PASSWORD_FILE = Path("/home/arthe/ap-password.txt")
 DEFAULT_HOST_RFID_SCAN_FILE = Path("/home/arthe/.local/state/rfid-mode/rfid-scan.json")
 DEFAULT_SUITE_RFID_SCAN_FILE = Path("/home/arthe/arthexis/.locks/rfid-scan.json")
@@ -253,6 +256,23 @@ def service_statuses() -> list[dict[str, object]]:
     if not services:
         services = list(DEFAULT_STATUS_SERVICES)
     return [service_status(service) for service in services]
+
+
+def reset_access_point() -> bool:
+    """Explicitly rotate and locally display the AP password."""
+    if not AP_ROTATE_COMMAND.is_file() or not os.access(AP_ROTATE_COMMAND, os.X_OK):
+        return False
+    try:
+        result = subprocess.run(
+            [str(AP_ROTATE_COMMAND), "--display"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=60,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.returncode == 0
 
 
 def portal_health() -> dict[str, object]:
@@ -1667,6 +1687,21 @@ class KioskStatusHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         self.wfile.write(body)
+
+    def do_POST(self) -> None:
+        if self.path.split("?", 1)[0] != AP_RESET_PATH:
+            self._send(404, "text/plain; charset=utf-8", b"not found\\n")
+            return
+        if not client_is_loopback(self._client_ip()):
+            self._send(403, "application/json; charset=utf-8", b'{"ok":false}')
+            return
+        ok = reset_access_point()
+        self.log_message("AP reset: %s", "ok" if ok else "failed")
+        self._send(
+            200 if ok else 502,
+            "application/json; charset=utf-8",
+            json.dumps({"ok": ok}).encode("utf-8"),
+        )
 
     def do_GET(self) -> None:
         if self.path.split("?", 1)[0] in {"/data", "/kiosk/status/data/"}:
