@@ -17,7 +17,9 @@ jobs:
           python-version: '3.11'
       - name: Compile Python sources
         run: python -m compileall -q kiosk/bin/gway-kiosk-status scripts/ap/prodigy-ap-password tests
-      - name: Run isolated AP and kiosk regression tests
-        run: python -m unittest discover -s tests -p 'test_ap*.py' -v && python -m unittest discover -s tests -p 'test_kiosk_ap_reset.py' -v
+      - name: Install test dependencies
+        run: python -m pip install pytest
+      - name: Run AP and kiosk regression tests
+        run: python -m pytest -q tests/test_ap_reveal.py tests/test_ap_wrappers.py tests/test_kiosk_ap_reset.py tests/test_ap_portal_server.py
       - name: Shell syntax
         run: bash -n scripts/ap/prodigy-ap-reveal scripts/ap/prodigy-ap-rotate kiosk/tools/install.sh
