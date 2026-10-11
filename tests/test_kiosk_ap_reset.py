@@ -42,7 +42,7 @@ class KioskApResetTests(unittest.TestCase):
         command.assert_called_once_with()
 
     def test_rotate_target_and_display_are_explicit(self):
-        with patch.object(kiosk.AP_ROTATE_COMMAND, "is_file", return_value=True), \
+        with patch.object(Path, "is_file", return_value=True), \
              patch.object(kiosk.os, "access", return_value=True), \
              patch.object(kiosk.subprocess, "run") as run:
             run.return_value.returncode = 0
