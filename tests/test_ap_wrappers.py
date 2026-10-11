@@ -9,7 +9,7 @@ AP = ROOT / "scripts/ap"
 
 
 class ApWrapperTests(unittest.TestCase):
-    def run_wrapper(self, name, args=()):
+    def run_wrapper(self, name, args=(), *, fail_on=None):
         with tempfile.TemporaryDirectory() as directory:
             fake = Path(directory) / "sudo"
             log = Path(directory) / "calls"
@@ -20,7 +20,7 @@ class ApWrapperTests(unittest.TestCase):
             lcd.chmod(0o755)
             import os
             env = dict(os.environ, PATH=directory + ":" + os.environ["PATH"], AP_CALLS=str(log),
-                       PRODIGY_AP_LCD_HELPER=str(lcd))
+                       PRODIGY_AP_LCD_HELPER=str(lcd), AP_FAIL_ON=fail_on or "")
             result = subprocess.run(["bash", str(AP / name), *args], capture_output=True,
                                     text=True, env=env, check=False)
             return result, log.read_text() if log.exists() else ""
@@ -47,6 +47,18 @@ class ApWrapperTests(unittest.TestCase):
         result, calls = self.run_wrapper("prodigy-ap-rotate", ["--display"])
         self.assertEqual(result.returncode, 0)
         self.assertEqual(calls.splitlines()[-1], "LCD")
+
+    def test_failed_rotation_skips_network_reapply_and_lcd(self):
+        result, calls = self.run_wrapper("prodigy-ap-rotate", ["--display"], fail_on="password rotate")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("connection up", calls)
+        self.assertNotIn("LCD", calls)
+
+    def test_failed_network_reapply_skips_lcd(self):
+        result, calls = self.run_wrapper("prodigy-ap-rotate", ["--display"], fail_on="connection up")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("password rotate", calls)
+        self.assertNotIn("LCD", calls)
 
     def test_invalid_rotate_option_has_no_side_effects(self):
         result, calls = self.run_wrapper("prodigy-ap-rotate", ["--invalid"])
