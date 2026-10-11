@@ -60,6 +60,9 @@ install_config_file() {
   install_root_file "${mode}" "${src}" "${dest}"
 }
 
+# Install the new explicit rotation helper before deploying a kiosk that invokes it.
+# The legacy reveal helper and root controller are intentionally NOT replaced here.
+install -D -m 0755 "${repo_dir}/../scripts/ap/prodigy-ap-rotate" /home/arthe/.local/bin/prodigy-ap-rotate
 install_user_file 0755 bin/gway-kiosk-status /home/arthe/.local/bin/gway-kiosk-status
 install_user_file 0755 bin/kiosk-mode /home/arthe/.local/bin/kiosk-mode
 install_user_file 0755 bin/arthexis-kiosk-login-session /home/arthe/.local/bin/arthexis-kiosk-login-session
