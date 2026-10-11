@@ -1698,6 +1698,18 @@ class KioskStatusHandler(http.server.BaseHTTPRequestHandler):
         if not client_is_loopback(self._client_ip()):
             self._send(403, "application/json; charset=utf-8", b'{"ok":false}')
             return
+        # Rotation is disabled unless explicitly enabled by the local operator.
+        # A loopback-bound proxy can otherwise turn a remote request into loopback.
+        if not truthy(os.environ.get("GWAY_KIOSK_ALLOW_AP_ROTATION")):
+            self._send(403, "application/json; charset=utf-8", b'{"ok":false}')
+            return
+        # Browser-originated POSTs must be same-origin. Reject missing Origin too:
+        # the kiosk UI always supplies it; this prevents blind cross-site forms.
+        origin = self.headers.get("Origin", "")
+        host = self.headers.get("Host", "")
+        if not origin or origin not in {"http://" + host, "https://" + host} or host.split(":")[0] not in {"127.0.0.1", "localhost", "[::1]"}:
+            self._send(403, "application/json; charset=utf-8", b'{"ok":false}')
+            return
         ok = reset_access_point()
         self.log_message("AP reset: %s", "ok" if ok else "failed")
         self._send(
