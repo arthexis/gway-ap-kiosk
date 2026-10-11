@@ -70,7 +70,7 @@ if [[ "${migrate_ap}" -eq 1 ]]; then
   controller="${repo_dir}/../scripts/ap/prodigy-ap-password"
   reveal="${repo_dir}/../scripts/ap/prodigy-ap-reveal"
   test -f "${controller}" && test -f "${reveal}" || { echo "AP migration sources missing" >&2; exit 1; }
-  grep -q 'def reveal_password' "${controller}" || { echo "Controller lacks read-only reveal" >&2; exit 1; }
+  grep -Fq 'choices=["boot-rotate", "ensure", "rotate", "reveal"]' "${controller}" || { echo "Controller lacks read-only reveal" >&2; exit 1; }
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
   sudo test ! -e /usr/local/sbin/prodigy-ap-password || sudo cp -p /usr/local/sbin/prodigy-ap-password "/usr/local/sbin/prodigy-ap-password.backup-${stamp}"
   test ! -e /home/arthe/.local/bin/prodigy-ap-reveal || cp -p /home/arthe/.local/bin/prodigy-ap-reveal "/home/arthe/.local/bin/prodigy-ap-reveal.backup-${stamp}"
