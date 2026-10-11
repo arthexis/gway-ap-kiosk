@@ -966,9 +966,7 @@ def render_html(payload: dict[str, object]) -> str:
           <p>Access</p>
           <strong>{h(ap.get("interface") or "-")}</strong>
         </div>
-        <form method="post" action="/kiosk/status/ap/reset/" onsubmit="return confirm('Rotate the AP password? Connected clients may disconnect.');">
-          <button type="submit">Rotate AP password (show on LCD)</button>
-        </form>
+        {('<form method="post" action="/kiosk/status/ap/reset/" onsubmit="return confirm(&quot;Rotate the AP password? Connected clients may disconnect.&quot;);"><button type="submit">Rotate AP password (show on LCD)</button></form>') if truthy(os.environ.get("GWAY_KIOSK_ALLOW_AP_ROTATION")) else ""}
         <div class="kiosk-ap-credentials">
           <div><span>SSID</span><strong>{h(ap.get("ssid") or "-")}</strong></div>
           <div><span>Password</span><strong>{h(ap.get("password") or ("Console only" if not ap.get("password_visible") else "-"))}</strong></div>
