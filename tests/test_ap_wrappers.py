@@ -13,7 +13,7 @@ class ApWrapperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             fake = Path(directory) / "sudo"
             log = Path(directory) / "calls"
-            fake.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$AP_CALLS"\n')
+            fake.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$AP_CALLS"\ncase "$*" in *"$AP_FAIL_ON"*) [ -z "$AP_FAIL_ON" ] || exit 1 ;; esac\n')
             fake.chmod(0o755)
             lcd = Path(directory) / "lcd"
             lcd.write_text('#!/bin/sh\nprintf "LCD\\n" >> "$AP_CALLS"\n')
