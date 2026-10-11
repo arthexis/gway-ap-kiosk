@@ -1,0 +1,23 @@
+name: AP and kiosk tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile Python sources
+        run: python -m compileall -q kiosk/bin/gway-kiosk-status scripts/ap/prodigy-ap-password tests
+      - name: Run isolated AP and kiosk regression tests
+        run: python -m unittest discover -s tests -p 'test_ap*.py' -v && python -m unittest discover -s tests -p 'test_kiosk_ap_reset.py' -v
+      - name: Shell syntax
+        run: bash -n scripts/ap/prodigy-ap-reveal scripts/ap/prodigy-ap-rotate kiosk/tools/install.sh
