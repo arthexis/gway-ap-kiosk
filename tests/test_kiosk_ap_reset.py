@@ -15,14 +15,16 @@ loader.exec_module(kiosk)
 
 
 class KioskApResetTests(unittest.TestCase):
-    def request(self, client, success=True):
+    def request(self, client, success=True, *, origin="http://127.0.0.1:8899", enabled=True):
         handler = object.__new__(kiosk.KioskStatusHandler)
         handler.path = kiosk.AP_RESET_PATH
         handler.client_address = (client, 1234)
+        handler.headers = {"Origin": origin, "Host": "127.0.0.1:8899"}
         sent = []
         handler._send = lambda status, content_type, body: sent.append((status, json.loads(body)))
         handler.log_message = lambda *args: None
-        with patch.object(kiosk, "reset_access_point", return_value=success) as command:
+        with patch.dict(kiosk.os.environ, {"GWAY_KIOSK_ALLOW_AP_ROTATION": "1" if enabled else "0"}), \
+             patch.object(kiosk, "reset_access_point", return_value=success) as command:
             handler.do_POST()
         return sent[0], command
 
@@ -40,6 +42,21 @@ class KioskApResetTests(unittest.TestCase):
         (status, body), command = self.request("127.0.0.1", False)
         self.assertEqual((status, body), (502, {"ok": False}))
         command.assert_called_once_with()
+
+    def test_disabled_rotation_rejected(self):
+        (status, body), command = self.request("127.0.0.1", enabled=False)
+        self.assertEqual((status, body), (403, {"ok": False}))
+        command.assert_not_called()
+
+    def test_cross_origin_rejected(self):
+        (status, body), command = self.request("127.0.0.1", origin="https://example.org")
+        self.assertEqual((status, body), (403, {"ok": False}))
+        command.assert_not_called()
+
+    def test_missing_origin_rejected(self):
+        (status, body), command = self.request("127.0.0.1", origin="")
+        self.assertEqual((status, body), (403, {"ok": False}))
+        command.assert_not_called()
 
     def test_rotate_target_and_display_are_explicit(self):
         with patch.object(Path, "is_file", return_value=True), \
