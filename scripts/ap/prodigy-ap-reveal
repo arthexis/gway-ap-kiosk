@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Read-only credential disclosure; invoke only in an authorized local context.
+set -euo pipefail
+if [[ "${1:-}" == "--dry-run" ]]; then
+  sudo -n /usr/local/sbin/prodigy-ap-password reveal >/dev/null
+  exit 0
+fi
+if [[ "$#" -ne 0 ]]; then
+  echo "usage: prodigy-ap-reveal [--dry-run]" >&2
+  exit 2
+fi
+exec sudo -n /usr/local/sbin/prodigy-ap-password reveal

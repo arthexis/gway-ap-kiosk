@@ -3,11 +3,12 @@ set -Eeuo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install_config=0
+migrate_ap=0
 overwrite_config=0
 
 usage() {
   cat <<'EOF'
-Usage: tools/install.sh [--install-config] [--overwrite-config]
+Usage: tools/install.sh [--install-config] [--overwrite-config] [--migrate-ap]
 
 Install gway-kiosk scripts, man pages, systemd units, and desktop launcher.
 Config examples are installed only with --install-config. Existing config files
@@ -17,6 +18,9 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --migrate-ap)
+      migrate_ap=1
+      ;;
     --install-config)
       install_config=1
       ;;
@@ -60,6 +64,23 @@ install_config_file() {
   install_root_file "${mode}" "${src}" "${dest}"
 }
 
+# AP controller migration is explicit because replacing root-owned code affects live AP credentials.
+# Back up both installed files before replacing either; do not rotate or restart AP.
+if [[ "${migrate_ap}" -eq 1 ]]; then
+  controller="${repo_dir}/../scripts/ap/prodigy-ap-password"
+  reveal="${repo_dir}/../scripts/ap/prodigy-ap-reveal"
+  test -f "${controller}" && test -f "${reveal}" || { echo "AP migration sources missing" >&2; exit 1; }
+  grep -Fq 'choices=["boot-rotate", "ensure", "rotate", "reveal"]' "${controller}" || { echo "Controller lacks read-only reveal" >&2; exit 1; }
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  sudo test ! -e /usr/local/sbin/prodigy-ap-password || sudo cp -p /usr/local/sbin/prodigy-ap-password "/usr/local/sbin/prodigy-ap-password.backup-${stamp}"
+  test ! -e /home/arthe/.local/bin/prodigy-ap-reveal || cp -p /home/arthe/.local/bin/prodigy-ap-reveal "/home/arthe/.local/bin/prodigy-ap-reveal.backup-${stamp}"
+  sudo install -D -m 0755 "${controller}" /usr/local/sbin/prodigy-ap-password
+  install -D -m 0755 "${reveal}" /home/arthe/.local/bin/prodigy-ap-reveal
+fi
+
+# Install the new explicit rotation helper before deploying a kiosk that invokes it.
+# The legacy reveal helper and root controller are intentionally NOT replaced here.
+install -D -m 0755 "${repo_dir}/../scripts/ap/prodigy-ap-rotate" /home/arthe/.local/bin/prodigy-ap-rotate
 install_user_file 0755 bin/gway-kiosk-status /home/arthe/.local/bin/gway-kiosk-status
 install_user_file 0755 bin/kiosk-mode /home/arthe/.local/bin/kiosk-mode
 install_user_file 0755 bin/arthexis-kiosk-login-session /home/arthe/.local/bin/arthexis-kiosk-login-session
