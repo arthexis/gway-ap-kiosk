@@ -1,5 +1,5 @@
 [Unit]
-Description=Arthexis HDMI kiosk
+Description=GWAY local HDMI kiosk
 After=lightdm.service gway-kiosk-status.service
 Wants=gway-kiosk-status.service
 ConditionPathExists=/usr/local/sbin/arthexis-hdmi-kiosk-session
