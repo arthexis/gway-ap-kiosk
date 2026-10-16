@@ -733,7 +733,6 @@ def test_skip_firewall_sync_defaults_loopback_to_development_mac(tmp_path):
         assets_dir=str(tmp_path),
         state_dir=str(tmp_path / "state"),
         source_url="",
-        registration_email_recipient="",
         preauth_allow_host=[],
         disable_default_preauth_allow_hosts=False,
         trusted_macs_path="",
