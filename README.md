@@ -1,35 +1,29 @@
 # gway-ap-kiosk
 
-GWAY-owned host integrations for access-point onboarding, kiosk display, RFID
-mode routing, and AP/wifi helpers.
+Standalone GWAY Wi-Fi access point and local HDMI kiosk components.
 
-This repository exists to keep Raspberry Pi gateway behavior out of the
-Arthexis suite repository. Arthexis may still be the upstream web endpoint or
-database/API that a gateway talks to, but the local adapter logic belongs here.
+## Scope
 
-## Contents
+This repository owns the local AP controller, onboarding portal and HDMI kiosk. It does **not** provide Arthexis services, OCPP, RFID, LCD output, VNC sessions, or a remote console.
 
-- `scripts/ap_portal_server.py` and `config/data/ap_portal/`: captive/AP portal
-  source.
-- `scripts/ap/`: AP password rotation, LCD reveal, NetworkManager reapply, and
-  nftables authorization helpers.
-- `scripts/gway/rfid*`: host-local RFID publisher, mode runner, registration,
-  and action helpers.
-- `config/systemd/`: redacted systemd units for AP, RFID, and wifi-role
-  services.
-- `config/nftables/`: redacted nftables templates. Do not commit live MAC
-  allowlists.
-- `kiosk/`: imported standalone GWAY kiosk repo snapshot.
-- `docs/`: runbooks and man pages copied from the GWAY source promotion work.
+## Components
 
-## Boundaries
+- `scripts/ap/kiosk-ap`: discover the NetworkManager AP profile, report its status and perform explicitly authorized credential operations.
+- `scripts/ap_portal_server.py` and `config/data/ap_portal/`: local AP onboarding portal.
+- `kiosk/bin/gway-kiosk-status`: local status page, bound to `127.0.0.1:8899`.
+- `kiosk/`: HDMI session, layout and operator-facing launcher.
+- `ansible/playbooks/install.yml` and `deploy.sh`: deployment entrypoints.
 
-Keep these out of this repository:
+The AP is selected from NetworkManager state rather than from a fixed SSID or the former Prodigy profile. Do not store credentials, real MAC allowlists, browser profiles, or device-specific secrets in Git.
 
-- live RFID card IDs, card trees, scan JSON, and reader logs
-- AP passwords, authorized MAC files, nftables live rules with real MACs
-- VNC passwords, kiosk auto-display tokens, browser profiles, and caches
-- Arthexis application code that is not a host adapter
+## Deployment
 
-The Arthexis repo should expose stable suite contracts. This repo owns the
-GWAY-specific service units, local scripts, templates, and field runbooks.
+Use the root-level Ansible-backed `deploy.sh`. Deployment is intended for a fresh appliance; there is no legacy migration or uninstall path. Validate Ansible and the complete CI suite before production use. Hardware validation is performed separately after deployment.
+
+## Tests
+
+```sh
+python3 -m pytest -q tests
+```
+
+Credential disclosure and rotation require explicit privileges. The status HTTP endpoint must never expose AP credentials.
