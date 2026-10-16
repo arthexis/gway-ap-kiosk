@@ -3,12 +3,11 @@ set -Eeuo pipefail
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 install_config=0
-migrate_ap=0
 overwrite_config=0
 
 usage() {
   cat <<'EOF'
-Usage: tools/install.sh [--install-config] [--overwrite-config] [--migrate-ap]
+Usage: tools/install.sh [--install-config] [--overwrite-config]
 
 Install gway-kiosk scripts, man pages, systemd units, and desktop launcher.
 Config examples are installed only with --install-config. Existing config files
@@ -18,9 +17,6 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --migrate-ap)
-      migrate_ap=1
-      ;;
     --install-config)
       install_config=1
       ;;
@@ -64,20 +60,6 @@ install_config_file() {
   install_root_file "${mode}" "${src}" "${dest}"
 }
 
-# AP controller migration is explicit because replacing root-owned code affects live AP credentials.
-# Back up both installed files before replacing either; do not rotate or restart AP.
-if [[ "${migrate_ap}" -eq 1 ]]; then
-  controller="${repo_dir}/../scripts/ap/prodigy-ap-password"
-  reveal="${repo_dir}/../scripts/ap/prodigy-ap-reveal"
-  test -f "${controller}" && test -f "${reveal}" || { echo "AP migration sources missing" >&2; exit 1; }
-  grep -Fq 'choices=["boot-rotate", "ensure", "rotate", "reveal"]' "${controller}" || { echo "Controller lacks read-only reveal" >&2; exit 1; }
-  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  sudo test ! -e /usr/local/sbin/prodigy-ap-password || sudo cp -p /usr/local/sbin/prodigy-ap-password "/usr/local/sbin/prodigy-ap-password.backup-${stamp}"
-  test ! -e /home/arthe/.local/bin/prodigy-ap-reveal || cp -p /home/arthe/.local/bin/prodigy-ap-reveal "/home/arthe/.local/bin/prodigy-ap-reveal.backup-${stamp}"
-  sudo install -D -m 0755 "${controller}" /usr/local/sbin/prodigy-ap-password
-  install -D -m 0755 "${reveal}" /home/arthe/.local/bin/prodigy-ap-reveal
-fi
-
 # Install the new explicit rotation helper before deploying a kiosk that invokes it.
 # The legacy reveal helper and root controller are intentionally NOT replaced here.
 install -D -m 0755 "${repo_dir}/../scripts/ap/prodigy-ap-rotate" /home/arthe/.local/bin/prodigy-ap-rotate
@@ -86,7 +68,6 @@ install_user_file 0755 bin/kiosk-mode /home/arthe/.local/bin/kiosk-mode
 install_user_file 0755 bin/arthexis-kiosk-login-session /home/arthe/.local/bin/arthexis-kiosk-login-session
 install_root_file 0755 sbin/arthexis-hdmi-kiosk-layout /usr/local/sbin/arthexis-hdmi-kiosk-layout
 install_root_file 0755 sbin/arthexis-hdmi-kiosk-session /usr/local/sbin/arthexis-hdmi-kiosk-session
-install_root_file 0755 sbin/arthexis-vnc-kiosk-session /usr/local/sbin/arthexis-vnc-kiosk-session
 install_root_file 0755 libexec/gway-boot-stagger-until /usr/local/libexec/gway-boot-stagger-until
 
 install_user_file 0644 man/man1/gway-kiosk-status.1 /home/arthe/.local/share/man/man1/gway-kiosk-status.1
@@ -98,22 +79,9 @@ install_root_file 0644 systemd/arthexis-hdmi-kiosk-layout.service.d/20-bastion-r
 install_root_file 0644 systemd/arthexis-hdmi-kiosk-layout.service.d/98-boot-stagger-30s.conf /etc/systemd/system/arthexis-hdmi-kiosk-layout.service.d/98-boot-stagger-30s.conf
 install_root_file 0644 systemd/arthexis-hdmi-kiosk.service /etc/systemd/system/arthexis-hdmi-kiosk.service
 install_root_file 0644 systemd/arthexis-hdmi-kiosk.service.d/98-boot-stagger-30s.conf /etc/systemd/system/arthexis-hdmi-kiosk.service.d/98-boot-stagger-30s.conf
-install_root_file 0644 systemd/arthexis-vnc-kiosk.service /etc/systemd/system/arthexis-vnc-kiosk.service
-install_root_file 0644 systemd/arthexis-vnc-kiosk.service.d/10-allow-kiosk-cdn.conf /etc/systemd/system/arthexis-vnc-kiosk.service.d/10-allow-kiosk-cdn.conf
-install_root_file 0644 systemd/arthexis-vnc-kiosk.service.d/98-boot-stagger-30s.conf /etc/systemd/system/arthexis-vnc-kiosk.service.d/98-boot-stagger-30s.conf
 install_root_file 0644 systemd/bastion-usb-refresh.service.d/60-kiosk-layout.conf /etc/systemd/system/bastion-usb-refresh.service.d/60-kiosk-layout.conf
 
 install_root_file 0644 config/arthexis-kiosk/openbox-rc.xml /etc/arthexis-kiosk/openbox-rc.xml
-if id vnc-kiosk >/dev/null 2>&1; then
-  sudo install -d -o vnc-kiosk -g vnc-kiosk -m 0700 \
-    /var/lib/arthexis-vnc-kiosk \
-    /var/lib/arthexis-vnc-kiosk/.config \
-    /var/lib/arthexis-vnc-kiosk/.cache \
-    /var/lib/arthexis-vnc-kiosk/.local \
-    /var/lib/arthexis-vnc-kiosk/.local/share \
-    /var/lib/arthexis-vnc-kiosk/runtime \
-    /var/lib/arthexis-vnc-kiosk/chromium-cache \
-    /var/lib/arthexis-vnc-kiosk/chromium-profile
 fi
 install_user_file 0644 "desktop/Kiosk Mode.desktop" "/home/arthe/Desktop/Kiosk Mode.desktop"
 install_user_file 0644 applications/kiosk-mode.desktop /home/arthe/.local/share/applications/kiosk-mode.desktop
@@ -121,8 +89,6 @@ install_user_file 0644 applications/kiosk-mode.desktop /home/arthe/.local/share/
 if [[ "${install_config}" -eq 1 ]]; then
   install_config_file 0644 defaults/arthexis-hdmi-kiosk.example /etc/default/arthexis-hdmi-kiosk
   install_config_file 0644 defaults/arthexis-hdmi-kiosk-layout.example /etc/default/arthexis-hdmi-kiosk-layout
-  install_config_file 0644 defaults/arthexis-vnc-kiosk.example /etc/default/arthexis-vnc-kiosk
-  install_config_file 0640 config/arthexis-kiosk/vnc.conf.example /etc/arthexis-kiosk/vnc.conf
 fi
 
 sudo systemctl daemon-reload
