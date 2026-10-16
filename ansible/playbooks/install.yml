@@ -22,8 +22,8 @@
         group: root
         mode: "0755"
       loop:
-        - { src: kiosk/bin/gway-kiosk-status, dest: /usr/local/bin/gway-kiosk-status }
-        - { src: kiosk/bin/kiosk-mode, dest: /usr/local/bin/kiosk-mode }
+        - { src: kiosk/bin/gway-kiosk-status, dest: /home/arthe/.local/bin/gway-kiosk-status }
+        - { src: kiosk/bin/kiosk-mode, dest: /home/arthe/.local/bin/kiosk-mode }
         - { src: kiosk/sbin/arthexis-hdmi-kiosk-session, dest: /usr/local/sbin/arthexis-hdmi-kiosk-session }
         - { src: kiosk/sbin/arthexis-hdmi-kiosk-layout, dest: /usr/local/sbin/arthexis-hdmi-kiosk-layout }
         - { src: kiosk/libexec/gway-boot-stagger-until, dest: /usr/local/libexec/gway-boot-stagger-until }
