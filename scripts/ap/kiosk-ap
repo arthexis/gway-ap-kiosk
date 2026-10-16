@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import secrets
 import subprocess
 import sys
 
@@ -57,10 +58,52 @@ def discover(items, selected_uuid=None):
     return {"state": "selected", "ap": candidates[0]}
 
 
+ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
+
+
+def selected_ap():
+    result = discover(profiles(), os.environ.get("KIOSK_AP_CONNECTION_UUID"))
+    if result["state"] != "selected":
+        raise DiscoveryError("Cannot select AP: " + result["state"])
+    return result["ap"]
+
+
+def reveal_password(ap):
+    # Never include secrets in status or error messages.
+    return nmcli("-s", "-g", "802-11-wireless-security.psk", "connection", "show", "uuid", ap["uuid"])
+
+
+def rotate_password(ap):
+    if not ap["active"]:
+        raise DiscoveryError("AP must be active to rotate its password")
+    password = "".join(secrets.choice(ALPHABET) for _ in range(16))
+    result = subprocess.run(
+        ["nmcli", "connection", "modify", "uuid", ap["uuid"], "802-11-wireless-security.psk", password],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode:
+        raise DiscoveryError("Unable to update selected AP credentials")
+    return password
+
+
 def main():
     parser = argparse.ArgumentParser(description="Discover a NetworkManager access point without changing it")
-    parser.add_argument("command", choices=("detect", "status"))
+    parser.add_argument("command", choices=("detect", "status", "reveal", "rotate"))
     args = parser.parse_args()
+    if args.command in ("reveal", "rotate"):
+        if os.geteuid() != 0:
+            print("Root privileges required", file=sys.stderr)
+            return 1
+        try:
+            ap = selected_ap()
+            password = reveal_password(ap) if args.command == "reveal" else rotate_password(ap)
+            if not password:
+                raise DiscoveryError("No readable AP password")
+            print(password)
+            return 0
+        except (DiscoveryError, OSError) as exc:
+            print("AP credential operation failed: " + str(exc), file=sys.stderr)
+            return 1
     try:
         result = discover(profiles(), os.environ.get("KIOSK_AP_CONNECTION_UUID"))
     except (DiscoveryError, OSError) as exc:
