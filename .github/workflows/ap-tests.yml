@@ -20,6 +20,6 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install pytest
       - name: Run AP and kiosk regression tests
-        run: python -m pytest -q --durations=0 --durations-min=0.001 tests/test_ap_reveal.py tests/test_ap_wrappers.py tests/test_kiosk_ap_reset.py tests/test_ap_portal_server.py
+        run: python -m pytest -q --durations=0 --durations-min=0.001 tests/test_ap_reveal.py tests/test_ap_wrappers.py tests/test_kiosk_ap_reset.py tests/test_kiosk_independence.py tests/test_ap_portal_server.py
       - name: Shell syntax
         run: bash -n scripts/ap/prodigy-ap-reveal scripts/ap/prodigy-ap-rotate kiosk/tools/install.sh
