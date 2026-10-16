@@ -80,7 +80,8 @@ def test_field_view_html_contains_the_fail_closed_overlay(monkeypatch, tmp_path)
     assert "data-field-view-url" in html
 
 
-def test_kiosk_html_uses_tabs_and_two_column_lcd_history():
+def test_kiosk_html_uses_tabs_and_two_column_lcd_history(monkeypatch):
+    monkeypatch.setenv("GWAY_KIOSK_ALLOW_AP_ROTATION", "1")
     payload = kiosk_status.build_payload()
     payload["ap"]["qr_data_uri"] = "data:image/png;base64,test"
     html = kiosk_status.render_html(payload)
@@ -190,16 +191,12 @@ def test_only_arthexis_and_lcd_services_render_restart_controls():
     assert "grid-template-columns: minmax(0, 1fr) auto auto;" in kiosk_status.render_html(kiosk_status.build_payload())
 
 
-def test_ap_reset_only_runs_the_maintained_reveal_command(monkeypatch, tmp_path):
-    reset_command = tmp_path / "prodigy-ap-reveal"
-    lcd_tool = tmp_path / "prodigy-password-lcd-60s"
+def test_ap_reset_only_runs_the_maintained_rotate_command(monkeypatch, tmp_path):
+    reset_command = tmp_path / "prodigy-ap-rotate"
     reset_command.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
-    lcd_tool.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
     reset_command.chmod(0o755)
-    lcd_tool.chmod(0o755)
     calls = []
-    monkeypatch.setattr(kiosk_status, "AP_RESET_COMMAND", reset_command)
-    monkeypatch.setattr(kiosk_status, "AP_RESET_LCD_TOOL", lcd_tool)
+    monkeypatch.setattr(kiosk_status, "AP_ROTATE_COMMAND", reset_command)
     monkeypatch.setattr(
         kiosk_status.subprocess,
         "run",
@@ -208,8 +205,7 @@ def test_ap_reset_only_runs_the_maintained_reveal_command(monkeypatch, tmp_path)
     )
 
     assert kiosk_status.reset_access_point()
-    assert calls[0][0] == [str(reset_command)]
-    assert calls[0][1]["env"]["PRODIGY_AP_LCD_TOOL"] == str(lcd_tool)
+    assert calls[0][0] == [str(reset_command), "--display"]
 
 
 def test_services_are_sorted_alphabetically(monkeypatch):

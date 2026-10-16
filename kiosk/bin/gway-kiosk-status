@@ -27,6 +27,9 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 from zoneinfo import ZoneInfo
 
 
+AP_RESET_PATH = "/kiosk/status/ap/reset/"
+AP_ROTATE_COMMAND = Path("/home/arthe/.local/bin/prodigy-ap-rotate")
+
 DEFAULT_AP_PASSWORD_FILE = Path("/home/arthe/ap-password.txt")
 DEFAULT_HOST_RFID_SCAN_FILE = Path("/home/arthe/.local/state/rfid-mode/rfid-scan.json")
 DEFAULT_SUITE_RFID_SCAN_FILE = Path("/home/arthe/arthexis/.locks/rfid-scan.json")
@@ -41,8 +44,6 @@ DEFAULT_LCD_RUNNER_HISTORY_FILE = Path(
 DEFAULT_LCD_STANDBY_SCRIPT = Path(
     "/home/arthe/.local/state/lcd-lockfiles/lcd-rotation.script"
 )
-AP_RESET_COMMAND = Path("/home/arthe/gway-ap-kiosk/scripts/ap/prodigy-ap-reveal")
-AP_RESET_LCD_TOOL = Path("/home/arthe/gway-ap-kiosk/scripts/ap/prodigy-password-lcd-60s")
 DEFAULT_CPU_TEMP_FILE = Path("/sys/class/thermal/thermal_zone0/temp")
 DEFAULT_OS_RELEASE_FILE = Path("/etc/os-release")
 DEFAULT_UPTIME_FILE = Path("/proc/uptime")
@@ -75,7 +76,6 @@ TAKEOVER_TITLE_LIMIT = 80
 LAYOUT_VERSION = "gway-local-kiosk-todo-v1"
 RESTARTABLE_SERVICES = frozenset({"arthexis.service", "lcd-arthexis.service"})
 SERVICE_RESTART_PATH_PREFIX = "/kiosk/status/services/"
-AP_RESET_PATH = "/kiosk/status/ap/reset/"
 
 
 class NoRedirectHandler(HTTPRedirectHandler):
@@ -323,22 +323,16 @@ def restart_service(name: str) -> bool:
 
 
 def reset_access_point() -> bool:
-    """Run the maintained AP reveal/reset operation without exposing credentials."""
-
-    if not AP_RESET_COMMAND.is_file() or not os.access(AP_RESET_COMMAND, os.X_OK):
+    """Explicitly rotate and locally display the AP password."""
+    if not AP_ROTATE_COMMAND.is_file() or not os.access(AP_ROTATE_COMMAND, os.X_OK):
         return False
-    if not AP_RESET_LCD_TOOL.is_file() or not os.access(AP_RESET_LCD_TOOL, os.X_OK):
-        return False
-    environment = os.environ.copy()
-    environment["PRODIGY_AP_LCD_TOOL"] = str(AP_RESET_LCD_TOOL)
     try:
         result = subprocess.run(
-            [str(AP_RESET_COMMAND)],
+            [str(AP_ROTATE_COMMAND), "--display"],
             capture_output=True,
             check=False,
             text=True,
             timeout=60,
-            env=environment,
         )
     except (OSError, subprocess.SubprocessError):
         return False
@@ -1287,7 +1281,7 @@ def render_html(payload: dict[str, object]) -> str:
           </div>
           <div class="kiosk-ap-action">
             {f'<img class="kiosk-ap-qr" src="{h(ap.get("qr_data_uri"))}" alt="AP Wi-Fi QR code">' if ap.get("qr_data_uri") else ""}
-            <button class="kiosk-ap-reset" type="button" data-kiosk-ap-reset>RESET</button>
+            {('<button class="kiosk-ap-reset" type="button" data-kiosk-ap-reset>RESET</button>') if truthy(os.environ.get("GWAY_KIOSK_ALLOW_AP_ROTATION")) else ""}
           </div>
         </div>
       </article>
@@ -2438,17 +2432,39 @@ class KioskStatusHandler(http.server.BaseHTTPRequestHandler):
         body = json.dumps({"ok": ok, "service": service}).encode("utf-8")
         self._send(200 if ok else 502, "application/json; charset=utf-8", body)
 
-    def _reset_access_point(self) -> None:
-        if not client_is_loopback(self._client_ip()):
-            self._send(403, "application/json; charset=utf-8", b'{"ok":false}')
+    def do_POST(self) -> None:
+        path = self.path.split("?", 1)[0]
+        if path == AP_RESET_PATH:
+            if not client_is_loopback(self._client_ip()):
+                self._send(403, "application/json; charset=utf-8", b'{"ok":false}')
+                return
+            # Rotation is disabled unless explicitly enabled by the local operator.
+            # A loopback-bound proxy can otherwise turn a remote request into loopback.
+            if not truthy(os.environ.get("GWAY_KIOSK_ALLOW_AP_ROTATION")):
+                self._send(403, "application/json; charset=utf-8", b'{"ok":false}')
+                return
+            # Browser-originated POSTs must be same-origin. Reject missing Origin too:
+            # the kiosk UI always supplies it; this prevents blind cross-site forms.
+            origin = self.headers.get("Origin", "")
+            host = self.headers.get("Host", "")
+            if not origin or origin not in {"http://" + host, "https://" + host} or host.split(":")[0] not in {"127.0.0.1", "localhost", "[::1]"}:
+                self._send(403, "application/json; charset=utf-8", b'{"ok":false}')
+                return
+            ok = reset_access_point()
+            self.log_message("AP reset: %s", "ok" if ok else "failed")
+            self._send(
+                200 if ok else 502,
+                "application/json; charset=utf-8",
+                json.dumps({"ok": ok}).encode("utf-8"),
+            )
             return
-        ok = reset_access_point()
-        self.log_message("AP reset: %s", "ok" if ok else "failed")
-        self._send(
-            200 if ok else 502,
-            "application/json; charset=utf-8",
-            json.dumps({"ok": ok}).encode("utf-8"),
-        )
+        if path.startswith(SERVICE_RESTART_PATH_PREFIX) and path.endswith("/restart"):
+            self._restart_service(path)
+            return
+        if path.startswith(CONSOLE_PROXY_PREFIX):
+            self._proxy_console()
+            return
+        self._send(404, "text/plain; charset=utf-8", b"not found\\n")
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
@@ -2468,19 +2484,6 @@ class KioskStatusHandler(http.server.BaseHTTPRequestHandler):
             payload = build_payload(self._client_ip())
             body = render_html(payload).encode("utf-8")
             self._send(200, "text/html; charset=utf-8", body)
-            return
-        self._send(404, "text/plain; charset=utf-8", b"not found\n")
-
-    def do_POST(self) -> None:
-        path = self.path.split("?", 1)[0]
-        if path == AP_RESET_PATH:
-            self._reset_access_point()
-            return
-        if path.startswith(SERVICE_RESTART_PATH_PREFIX) and path.endswith("/restart"):
-            self._restart_service(path)
-            return
-        if path.startswith(CONSOLE_PROXY_PREFIX):
-            self._proxy_console()
             return
         self._send(404, "text/plain; charset=utf-8", b"not found\n")
 
