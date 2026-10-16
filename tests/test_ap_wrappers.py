@@ -43,22 +43,15 @@ class ApWrapperTests(unittest.TestCase):
             "-n /usr/local/bin/prodigy-nmcli connection up PRODIGY",
         ])
 
-    def test_rotate_with_lcd(self):
-        result, calls = self.run_wrapper("prodigy-ap-rotate", ["--display"])
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(calls.splitlines()[-1], "LCD")
-
-    def test_failed_rotation_skips_network_reapply_and_lcd(self):
-        result, calls = self.run_wrapper("prodigy-ap-rotate", ["--display"], fail_on="password rotate")
+    def test_failed_rotation_skips_network_reapply(self):
+        result, calls = self.run_wrapper("prodigy-ap-rotate", fail_on="password rotate")
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("connection up", calls)
-        self.assertNotIn("LCD", calls)
 
-    def test_failed_network_reapply_skips_lcd(self):
-        result, calls = self.run_wrapper("prodigy-ap-rotate", ["--display"], fail_on="connection up")
+    def test_failed_network_reapply_is_reported(self):
+        result, calls = self.run_wrapper("prodigy-ap-rotate", fail_on="connection up")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("password rotate", calls)
-        self.assertNotIn("LCD", calls)
 
     def test_invalid_rotate_option_has_no_side_effects(self):
         result, calls = self.run_wrapper("prodigy-ap-rotate", ["--invalid"])
