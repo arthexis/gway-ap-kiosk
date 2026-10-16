@@ -100,9 +100,14 @@ def test_rotate_changes_only_selected_profile_password(monkeypatch):
     class Result:
         returncode = 0
     monkeypatch.setattr(module.subprocess, "run", lambda command, **kwargs: (calls.append(command), Result())[1])
-    chosen = ap("chosen", True)\n    chosen["interface"] = "wlan7"\n    password = module.rotate_password(chosen)
+    chosen = ap("chosen", True)
+    chosen["interface"] = "wlan7"
+    password = module.rotate_password(chosen)
     assert len(password) == 16
-    assert calls == [\n        ["nmcli", "connection", "modify", "uuid", "chosen", "802-11-wireless-security.psk", password],\n        ["nmcli", "device", "reapply", "wlan7"],\n    ]
+    assert calls == [
+        ["nmcli", "connection", "modify", "uuid", "chosen", "802-11-wireless-security.psk", password],
+        ["nmcli", "device", "reapply", "wlan7"],
+    ]
 
 
 def test_rotate_refuses_inactive_profile(monkeypatch):
