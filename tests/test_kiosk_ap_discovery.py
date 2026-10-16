@@ -93,3 +93,30 @@ def test_networkmanager_failure_is_not_hidden(monkeypatch):
     import pytest
     with pytest.raises(module.DiscoveryError, match="not running"):
         module.profiles()
+
+
+def test_rotate_changes_only_selected_profile_password(monkeypatch):
+    calls = []
+    class Result:
+        returncode = 0
+    monkeypatch.setattr(module.subprocess, "run", lambda command, **kwargs: (calls.append(command), Result())[1])
+    password = module.rotate_password(ap("chosen", True))
+    assert len(password) == 16
+    assert calls == [["nmcli", "connection", "modify", "uuid", "chosen", "802-11-wireless-security.psk", password]]
+
+
+def test_rotate_refuses_inactive_profile(monkeypatch):
+    import pytest
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: pytest.fail("must not modify NetworkManager"))
+    with pytest.raises(module.DiscoveryError, match="active"):
+        module.rotate_password(ap("inactive"))
+
+
+def test_reveal_uses_selected_uuid(monkeypatch):
+    calls = []
+    def fake_nmcli(*args):
+        calls.append(args)
+        return "existing-secret"
+    monkeypatch.setattr(module, "nmcli", fake_nmcli)
+    assert module.reveal_password(ap("chosen")) == "existing-secret"
+    assert calls == [("-s", "-g", "802-11-wireless-security.psk", "connection", "show", "uuid", "chosen")]
