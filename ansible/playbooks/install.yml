@@ -27,7 +27,18 @@
         - { src: kiosk/sbin/arthexis-hdmi-kiosk-session, dest: /usr/local/sbin/arthexis-hdmi-kiosk-session }
         - { src: kiosk/sbin/arthexis-hdmi-kiosk-layout, dest: /usr/local/sbin/arthexis-hdmi-kiosk-layout }
         - { src: kiosk/libexec/gway-boot-stagger-until, dest: /usr/local/libexec/gway-boot-stagger-until }
-        - { src: scripts/ap/prodigy-ap-rotate, dest: /usr/local/bin/prodigy-ap-rotate }
+        - { src: scripts/ap/kiosk-ap, dest: /usr/local/sbin/kiosk-ap }
+
+    - name: Install restricted AP rotation sudoers policy
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/gway-kiosk-ap
+        owner: root
+        group: root
+        mode: "0440"
+        content: |
+          {{ kiosk_user }} ALL=(root) NOPASSWD: /usr/local/sbin/kiosk-ap rotate
+        validate: /usr/sbin/visudo -cf %s
 
     - name: Install kiosk systemd services
       become: true
