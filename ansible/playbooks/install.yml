@@ -1,0 +1,83 @@
+---
+- name: Install standalone AP kiosk on a fresh appliance
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    kiosk_user: arthe
+    kiosk_home: /home/arthe
+    project_root: "{{ playbook_dir }}/../.."
+  tasks:
+    - name: Require existing kiosk operator account
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ kiosk_user }}"
+
+    - name: Install kiosk and AP runtime executables
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - { src: kiosk/bin/gway-kiosk-status, dest: /usr/local/bin/gway-kiosk-status }
+        - { src: kiosk/bin/kiosk-mode, dest: /usr/local/bin/kiosk-mode }
+        - { src: kiosk/sbin/arthexis-hdmi-kiosk-session, dest: /usr/local/sbin/arthexis-hdmi-kiosk-session }
+        - { src: kiosk/sbin/arthexis-hdmi-kiosk-layout, dest: /usr/local/sbin/arthexis-hdmi-kiosk-layout }
+        - { src: kiosk/libexec/gway-boot-stagger-until, dest: /usr/local/libexec/gway-boot-stagger-until }
+        - { src: scripts/ap/prodigy-ap-rotate, dest: /usr/local/bin/prodigy-ap-rotate }
+
+    - name: Install kiosk systemd services
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/kiosk/systemd/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - gway-kiosk-status.service
+        - arthexis-hdmi-kiosk.service
+        - arthexis-hdmi-kiosk-layout.service
+      notify: Reload systemd
+
+    - name: Install default kiosk configuration only on fresh installation
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/kiosk/defaults/{{ item.src }}"
+        dest: "/etc/default/{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "0644"
+        force: false
+      loop:
+        - { src: arthexis-hdmi-kiosk.example, dest: arthexis-hdmi-kiosk }
+        - { src: arthexis-hdmi-kiosk-layout.example, dest: arthexis-hdmi-kiosk-layout }
+
+    - name: Reload service manager before enabling kiosk status
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start standalone kiosk status
+      become: true
+      ansible.builtin.systemd_service:
+        name: gway-kiosk-status.service
+        enabled: true
+        state: started
+
+    - name: Check standalone kiosk HTTP response
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8899/kiosk/status/data/
+        return_content: false
+        status_code: 200
+      register: kiosk_health
+      retries: 5
+      delay: 2
+      until: kiosk_health.status == 200
+
+  handlers:
+    - name: Reload systemd
+      become: true
+      ansible.builtin.systemd_service:
+        daemon_reload: true
