@@ -12,7 +12,6 @@ python3 -m py_compile \
 bash -n \
   bin/kiosk-mode \
   sbin/arthexis-hdmi-kiosk-session \
-  sbin/arthexis-vnc-kiosk-session \
   libexec/gway-boot-stagger-until \
   tools/install.sh \
   tools/verify.sh
