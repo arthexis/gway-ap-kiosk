@@ -84,12 +84,10 @@ usage() {
   cat <<'EOF'
 Usage: kiosk-mode [on|off|status]
 
-Enable or disable the host-local Arthexis HDMI kiosk when the bastion USB key
+Enable or disable the host-local GWAY HDMI kiosk when the bastion USB key
 is verified. Disabling is refused while the key is absent so kiosk mode remains
 mandatory.
 
-Field view remains hidden unless it is enabled in the kiosk config, armed with
-the verified key, and a live charger connection is present.
 EOF
 }
 
