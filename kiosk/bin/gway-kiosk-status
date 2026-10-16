@@ -12,7 +12,7 @@ import sys
 
 AP_RESET_PATH = "/kiosk/status/ap/reset/"
 AP_ROTATE_COMMAND = Path("/usr/local/sbin/kiosk-ap")
-DEFAULT_AP_PASSWORD_FILE = Path("/home/arthe/ap-password.txt")
+AP_STATUS_COMMAND = Path("/usr/local/sbin/kiosk-ap")
 
 
 def truthy(value):
@@ -27,18 +27,26 @@ def client_is_loopback(address):
 
 
 def ap_context(client_ip="127.0.0.1"):
-    path = Path(os.environ.get("GWAY_KIOSK_AP_PASSWORD_FILE", str(DEFAULT_AP_PASSWORD_FILE)))
+    """Read only public AP metadata; never read a password file."""
+    empty = {"available": False, "ssid": "", "interface": "", "updated_at": "", "state": "unavailable"}
+    if not AP_STATUS_COMMAND.is_file():
+        return empty
     try:
-        data = dict(line.split("=", 1) for line in path.read_text().splitlines() if "=" in line)
-    except OSError:
-        data = {}
-    # Never provide a credential through HTTP, even on loopback.
-    return {
-        "available": bool(data.get("SSID")),
-        "ssid": data.get("SSID", ""),
-        "interface": data.get("INTERFACE", ""),
-        "updated_at": data.get("UPDATED_AT", ""),
-    }
+        result = subprocess.run(
+            [str(AP_STATUS_COMMAND), "status"], capture_output=True,
+            text=True, check=False, timeout=5,
+        )
+        data = json.loads(result.stdout)
+        ap = data.get("ap") or {}
+        return {
+            "available": data.get("state") == "selected",
+            "ssid": str(ap.get("ssid") or ""),
+            "interface": str(ap.get("interface") or ""),
+            "updated_at": "",
+            "state": str(data.get("state") or "unavailable"),
+        }
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError, AttributeError):
+        return empty
 
 
 def build_payload(client_ip="127.0.0.1"):
