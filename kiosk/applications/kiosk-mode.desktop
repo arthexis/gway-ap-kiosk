@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Kiosk Mode
-Comment=Start the Arthexis HDMI kiosk while the bastion key is present
+Comment=Start the GWAY HDMI kiosk while the bastion key is present
 Exec=/home/arthe/.local/bin/kiosk-mode on
 Icon=video-display
 Terminal=false
