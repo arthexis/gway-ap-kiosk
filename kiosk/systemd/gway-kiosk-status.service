@@ -16,7 +16,6 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=full
 ProtectHome=read-only
-ReadWritePaths=/home/arthe/.local/state/lcd-lockfiles
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 [Install]
