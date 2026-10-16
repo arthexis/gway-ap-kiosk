@@ -6,10 +6,9 @@ The HDMI kiosk is a standalone local interface for kiosk and Wi-Fi AP status. It
 
 - `bin/gway-kiosk-status`: loopback HTTP status server at `127.0.0.1:8899`; AP credentials are excluded from its responses.
 - `bin/kiosk-mode`: local HDMI kiosk control with bastion-key safety checks.
-- `bin/arthexis-kiosk-login-session`: legacy-named local login entrypoint.
 - `sbin/arthexis-hdmi-kiosk-session` and `sbin/arthexis-hdmi-kiosk-layout`: legacy-named local HDMI entrypoints.
 
-The `arthexis-` prefix on the retained executable and systemd names is historical naming only. These units must not depend on or start an Arthexis application service. Renaming them requires coordinated updates to systemd, desktop entries and deployment, and is separate from removing application dependencies.
+The `arthexis-` prefix on the retained HDMI executable and systemd names is historical naming only. These units must not depend on or start an Arthexis application service. Renaming them requires coordinated updates to systemd, desktop entries and deployment, and is separate from removing application dependencies.
 
 ## Installation
 
