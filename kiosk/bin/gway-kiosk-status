@@ -11,7 +11,7 @@ import subprocess
 import sys
 
 AP_RESET_PATH = "/kiosk/status/ap/reset/"
-AP_ROTATE_COMMAND = Path("/home/arthe/.local/bin/prodigy-ap-rotate")
+AP_ROTATE_COMMAND = Path("/usr/local/sbin/kiosk-ap")
 DEFAULT_AP_PASSWORD_FILE = Path("/home/arthe/ap-password.txt")
 
 
@@ -71,7 +71,7 @@ def reset_access_point():
         return False
     try:
         return subprocess.run(
-            [str(AP_ROTATE_COMMAND)], capture_output=True, check=False, timeout=60
+            ["sudo", "-n", str(AP_ROTATE_COMMAND), "rotate"], capture_output=True, check=False, timeout=60
         ).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
