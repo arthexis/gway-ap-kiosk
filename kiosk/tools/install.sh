@@ -81,8 +81,6 @@ install_root_file 0644 systemd/arthexis-hdmi-kiosk.service /etc/systemd/system/a
 install_root_file 0644 systemd/arthexis-hdmi-kiosk.service.d/98-boot-stagger-30s.conf /etc/systemd/system/arthexis-hdmi-kiosk.service.d/98-boot-stagger-30s.conf
 install_root_file 0644 systemd/bastion-usb-refresh.service.d/60-kiosk-layout.conf /etc/systemd/system/bastion-usb-refresh.service.d/60-kiosk-layout.conf
 
-install_root_file 0644 config/arthexis-kiosk/openbox-rc.xml /etc/arthexis-kiosk/openbox-rc.xml
-fi
 install_user_file 0644 "desktop/Kiosk Mode.desktop" "/home/arthe/Desktop/Kiosk Mode.desktop"
 install_user_file 0644 applications/kiosk-mode.desktop /home/arthe/.local/share/applications/kiosk-mode.desktop
 
