@@ -62,7 +62,7 @@ def test_nmcli_is_read_only(monkeypatch):
 
 def test_profiles_from_mock_networkmanager(monkeypatch):
     responses = {
-        ("-g", "UUID", "connection", "show"): "wifi-client\\nap-one\\nap-two",
+        ("-g", "UUID", "connection", "show"): "wifi-client\nap-one\nap-two",
         ("-g", "connection.type", "connection", "show", "uuid", "wifi-client"): "802-11-wireless",
         ("-g", "802-11-wireless.mode", "connection", "show", "uuid", "wifi-client"): "infrastructure",
         ("-g", "connection.type", "connection", "show", "uuid", "ap-one"): "802-11-wireless",
