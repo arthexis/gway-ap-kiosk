@@ -960,3 +960,26 @@ def test_subscribe_post_returns_json_error_when_request_logging_fails(tmp_path):
             module.HTTPStatus.INTERNAL_SERVER_ERROR,
         )
     ]
+
+
+def test_authorized_portal_response_has_no_suite_redirect(tmp_path):
+    module = load_portal_module()
+    state = module.PortalState(make_config(module, tmp_path))
+    state.resolve_mac = lambda _ip: "aa:bb:cc:dd:ee:ff"
+    state._authorized.add("aa:bb:cc:dd:ee:ff")
+    payload = state.status_for_request(
+        ip_address="10.42.0.25", user_agent="test", path="/api/status", host="some-host"
+    )
+    assert payload["authorized"] is True
+    assert not any("redirect" in key for key in payload)
+
+
+def test_portal_has_no_arthexis_runtime_dependencies():
+    module = load_portal_module()
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    assert "import django" not in source
+    assert "config.loadenv" not in source
+    assert "arthexis" not in source.lower()
+    assert "suite_login" not in source
+    assert "arthexis" not in (SCRIPT_PATH.parents[1] / "config/data/ap_portal/index.html").read_text().lower()
+    assert "window.location.href" not in (SCRIPT_PATH.parents[1] / "config/data/ap_portal/app.js").read_text()
