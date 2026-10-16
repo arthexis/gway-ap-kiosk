@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
-# Explicit, potentially disruptive AP password rotation.
+# Explicitly rotate AP password; never invoke the LCD from AP code.
 set -euo pipefail
-display=0
-case "${1:-}" in
-  "") ;;
-  --display) display=1 ;;
-  *) echo "usage: prodigy-ap-rotate [--display]" >&2; exit 2 ;;
-esac
+if [[ "$#" -ne 0 ]]; then
+  echo "usage: prodigy-ap-rotate" >&2
+  exit 2
+fi
 sudo -n /usr/local/sbin/prodigy-ap-password rotate >/dev/null
 sudo -n /usr/local/bin/prodigy-nmcli connection up PRODIGY >/dev/null
-if [[ "$display" -eq 1 ]]; then
-  exec "${PRODIGY_AP_LCD_HELPER:-$HOME/.local/bin/prodigy-password-lcd-60s}"
-fi
 echo "AP password rotated and connection reapplied."
