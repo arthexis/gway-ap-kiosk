@@ -31,8 +31,6 @@ fi
 : "${KIOSK_WHATSAPP_CACHE_DIR:=/home/arthe/.cache/whatsapp-kiosk-panel}"
 : "${KIOSK_WHATSAPP_EXTRA_CHROMIUM_FLAGS:=}"
 : "${KIOSK_WHATSAPP_LEFT_CROP_PIXELS:=0}"
-: "${KIOSK_RFID_AUTO_DISPLAY:=0}"
-: "${KIOSK_RFID_AUTO_DISPLAY_TOKEN_FILE:=/var/lib/arthexis-hdmi-kiosk/rfid-auto-display.token}"
 : "${KIOSK_BASTION_CHECK:=/usr/local/libexec/bastion-key-present}"
 : "${KIOSK_MANUAL_STATE_FILE:=/run/user/1000/arthexis-hdmi-kiosk/manual-enabled}"
 : "${KIOSK_RESTART_ON_KEY_ABSENT:=1}"
@@ -166,39 +164,14 @@ if truthy "${KIOSK_SUSPEND}"; then
 fi
 
 normalize_kiosk_url() {
-  local token=""
-  if [[ -r "${KIOSK_RFID_AUTO_DISPLAY_TOKEN_FILE}" ]]; then
-    token="$(tr -d '\r\n' < "${KIOSK_RFID_AUTO_DISPLAY_TOKEN_FILE}")"
-  fi
-  /usr/bin/python3 - "${KIOSK_URL}" "${KIOSK_RFID_AUTO_DISPLAY}" "${token}" <<'PY'
+  /usr/bin/python3 - "${KIOSK_URL}" <<'PY'
 import sys
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-url = sys.argv[1]
-auto_display = sys.argv[2].strip().lower() in {"1", "true", "yes", "on"}
-token = sys.argv[3].strip()
-parts = urlsplit(url)
-query_pairs = [
-    (key, value)
-    for key, value in parse_qsl(parts.query, keep_blank_values=True)
-    if key not in {"kiosk", "rfid_auto_display", "kiosk_rfid_auto_display_token"}
-]
+parts = urlsplit(sys.argv[1])
+query_pairs = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key != "kiosk"]
 query_pairs.append(("kiosk", "1"))
-if auto_display:
-    query_pairs.append(("rfid_auto_display", "1"))
-    if token:
-        query_pairs.append(("kiosk_rfid_auto_display_token", token))
-print(
-    urlunsplit(
-        (
-            parts.scheme,
-            parts.netloc,
-            parts.path or "/",
-            urlencode(query_pairs, doseq=True),
-            parts.fragment,
-        )
-    )
-)
+print(urlunsplit((parts.scheme, parts.netloc, parts.path or "/", urlencode(query_pairs), parts.fragment)))
 PY
 }
 
