@@ -64,7 +64,7 @@ class KioskApResetTests(unittest.TestCase):
              patch.object(kiosk.subprocess, "run") as run:
             run.return_value.returncode = 0
             self.assertTrue(kiosk.reset_access_point())
-        self.assertEqual(run.call_args.args[0], [str(kiosk.AP_ROTATE_COMMAND)])
+        self.assertEqual(run.call_args.args[0], ["sudo", "-n", str(kiosk.AP_ROTATE_COMMAND), "rotate"])
         self.assertTrue(run.call_args.kwargs["capture_output"])
 
 
