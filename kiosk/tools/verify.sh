@@ -6,11 +6,11 @@ cd "${repo_dir}"
 
 python3 -m py_compile \
   bin/gway-kiosk-status \
-  sbin/arthexis-hdmi-kiosk-layout
+  sbin/gway-hdmi-kiosk-layout
 
 bash -n \
   bin/kiosk-mode \
-  sbin/arthexis-hdmi-kiosk-session \
+  sbin/gway-hdmi-kiosk-session \
   libexec/gway-boot-stagger-until \
   tools/verify.sh
 
