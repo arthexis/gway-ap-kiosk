@@ -97,7 +97,7 @@ def rotate_password(ap):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Discover a NetworkManager access point without changing it")
+    parser = argparse.ArgumentParser(description="Discover AP profiles and explicitly manage credentials")
     parser.add_argument("command", choices=("detect", "status", "reveal", "rotate"))
     args = parser.parse_args()
     if args.command in ("reveal", "rotate"):
