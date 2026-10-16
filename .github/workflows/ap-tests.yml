@@ -16,7 +16,7 @@ jobs:
         with:
           python-version: '3.11'
       - name: Compile Python sources
-        run: python -m compileall -q kiosk/bin/gway-kiosk-status scripts/ap/prodigy-ap-password scripts/ap/kiosk-ap tests
+        run: python -m compileall -q kiosk/bin/gway-kiosk-status scripts/ap/kiosk-ap tests
       - name: Install test dependencies
         run: python -m pip install pytest
       - name: Run AP and kiosk regression tests
