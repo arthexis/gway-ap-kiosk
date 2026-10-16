@@ -1,5 +1,5 @@
 [Unit]
-Description=Apply Arthexis HDMI kiosk layout for bastion key state
+Description=Apply GWAY HDMI kiosk layout for bastion key state
 After=local-fs.target
 
 [Service]
