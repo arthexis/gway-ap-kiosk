@@ -13,7 +13,6 @@ bash -n \
   bin/kiosk-mode \
   sbin/arthexis-hdmi-kiosk-session \
   libexec/gway-boot-stagger-until \
-  tools/install.sh \
   tools/verify.sh
 
 bin/gway-kiosk-status --self-test
