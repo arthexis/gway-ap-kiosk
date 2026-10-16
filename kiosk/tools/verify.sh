@@ -6,7 +6,6 @@ cd "${repo_dir}"
 
 python3 -m py_compile \
   bin/gway-kiosk-status \
-  bin/arthexis-kiosk-login-session \
   sbin/arthexis-hdmi-kiosk-layout
 
 bash -n \
