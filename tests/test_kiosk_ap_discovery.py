@@ -100,9 +100,9 @@ def test_rotate_changes_only_selected_profile_password(monkeypatch):
     class Result:
         returncode = 0
     monkeypatch.setattr(module.subprocess, "run", lambda command, **kwargs: (calls.append(command), Result())[1])
-    password = module.rotate_password(ap("chosen", True))
+    chosen = ap("chosen", True)\n    chosen["interface"] = "wlan7"\n    password = module.rotate_password(chosen)
     assert len(password) == 16
-    assert calls == [["nmcli", "connection", "modify", "uuid", "chosen", "802-11-wireless-security.psk", password]]
+    assert calls == [\n        ["nmcli", "connection", "modify", "uuid", "chosen", "802-11-wireless-security.psk", password],\n        ["nmcli", "device", "reapply", "wlan7"],\n    ]
 
 
 def test_rotate_refuses_inactive_profile(monkeypatch):
@@ -120,3 +120,29 @@ def test_reveal_uses_selected_uuid(monkeypatch):
     monkeypatch.setattr(module, "nmcli", fake_nmcli)
     assert module.reveal_password(ap("chosen")) == "existing-secret"
     assert calls == [("-s", "-g", "802-11-wireless-security.psk", "connection", "show", "uuid", "chosen")]
+
+
+def test_failed_reapply_does_not_restart_ap_or_disclose_password(monkeypatch):
+    import pytest
+    calls = []
+    class Result:
+        def __init__(self, returncode):
+            self.returncode = returncode
+    def run(command, **kwargs):
+        calls.append(command)
+        return Result(1 if command[1:3] == ["device", "reapply"] else 0)
+    monkeypatch.setattr(module.subprocess, "run", run)
+    chosen = ap("chosen", True)
+    chosen["interface"] = "wlan7"
+    with pytest.raises(module.DiscoveryError, match="activation is pending"):
+        module.rotate_password(chosen)
+    assert [command[1:3] for command in calls] == [
+        ["connection", "modify"], ["device", "reapply"],
+    ]
+
+
+def test_active_ap_without_interface_is_not_modified(monkeypatch):
+    import pytest
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: pytest.fail("must not modify NetworkManager"))
+    with pytest.raises(module.DiscoveryError, match="known interface"):
+        module.rotate_password(ap("chosen", True))
