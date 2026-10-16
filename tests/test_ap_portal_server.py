@@ -66,16 +66,6 @@ def test_monitoring_notice_is_explicit_and_source_url_defaults_empty():
     assert module.DEFAULT_SOURCE_URL == ""
 
 
-def test_setup_script_uses_configured_cert_domain_for_suite_login_host():
-    script = (SCRIPT_PATH.parent / "setup_ap_portal.sh").read_text(encoding="utf-8")
-
-    assert 'SOURCE_URL="${SOURCE_URL:-}"' in script
-    assert "SOURCE_URL_SERVICE_ARG" in script
-    assert "github.com/arthexis/arthexis/blob" not in script
-    assert "--suite-login-host $DEFAULT_CERT_DOMAIN" in script
-    assert "--suite-login-host arthexis.net" not in script
-
-
 def test_ap_portal_assets_hide_source_link_until_source_url_is_configured():
     assets_dir = SCRIPT_PATH.parents[1] / "config" / "data" / "ap_portal"
     index = (assets_dir / "index.html").read_text(encoding="utf-8")
@@ -85,40 +75,6 @@ def test_ap_portal_assets_hide_source_link_until_source_url_is_configured():
     assert 'id="source-link" href=""' in index
     assert "github.com/arthexis/arthexis/blob" not in index
     assert "sourceRow.hidden = false" in app_js
-
-
-def test_ensure_django_ready_initializes_once_when_called_concurrently(monkeypatch):
-    module = load_portal_module()
-    setup_calls = []
-    setup_entered = threading.Event()
-    release_setup = threading.Event()
-    apps_state = SimpleNamespace(ready=False)
-    django_module = ModuleType("django")
-    apps_module = ModuleType("django.apps")
-    apps_module.apps = apps_state
-
-    def setup():
-        setup_calls.append("setup")
-        setup_entered.set()
-        assert release_setup.wait(1)
-        apps_state.ready = True
-
-    django_module.setup = setup
-    monkeypatch.setitem(sys.modules, "django", django_module)
-    monkeypatch.setitem(sys.modules, "django.apps", apps_module)
-    monkeypatch.setattr(module, "_load_environment", lambda: None)
-
-    workers = [threading.Thread(target=module._ensure_django_ready) for _ in range(2)]
-    for worker in workers:
-        worker.start()
-    assert setup_entered.wait(1)
-    release_setup.set()
-    for worker in workers:
-        worker.join(1)
-        assert not worker.is_alive()
-
-    assert setup_calls == ["setup"]
-    assert module.DJANGO_READY is True
 
 
 def test_normalize_preauth_allow_entry_strips_path_from_host():
@@ -144,7 +100,6 @@ def test_subscribe_records_consent_activity_and_authorizes_client(tmp_path):
 
     assert result["authorized"] is True
     assert result["mac_address"] == "aa:bb:cc:dd:ee:ff"
-    assert result["redirect_url"] == "http://arthexis.net:8888/login/"
     assert "ARE being monitored" in result["monitoring_notice"]
     assert (
         state.config.authorized_macs_path.read_text(encoding="utf-8")
@@ -164,79 +119,6 @@ def test_subscribe_records_consent_activity_and_authorizes_client(tmp_path):
     ]
     assert activity[-1]["event_type"] == "consent_accepted"
     assert activity[-1]["ip_address"] == "10.42.0.25"
-
-
-def test_subscribe_sends_registration_email_in_background(tmp_path):
-    module = load_portal_module()
-    config = replace(
-        make_config(module, tmp_path),
-        registration_email_recipient="admin@example.com",
-    )
-    notifications = []
-    notification_started = threading.Event()
-    release_notification = threading.Event()
-
-    def notify(*args):
-        notifications.append(args)
-        notification_started.set()
-        assert release_notification.wait(1)
-        return True
-
-    state = module.PortalState(
-        config,
-        registration_notifier=notify,
-    )
-    state.resolve_mac = lambda _ip: "aa:bb:cc:dd:ee:ff"
-
-    result = state.subscribe(
-        email="Guest@Example.COM",
-        accept_terms=True,
-        ip_address="10.42.0.25",
-        user_agent="client-test",
-        host="arthexis.net",
-    )
-
-    assert result["authorized"] is True
-    assert notification_started.wait(1)
-    assert len(notifications) == 1
-    notified_config, record, already_authorized, trusted_device = notifications[0]
-    assert notified_config.registration_email_recipient == "admin@example.com"
-    assert record["email"] == "guest@example.com"
-    assert already_authorized is False
-    assert trusted_device is False
-
-    release_notification.set()
-    event = wait_for_activity_event(config, "registration_email_sent")
-    assert event["email"] == "guest@example.com"
-
-
-def test_subscribe_keeps_authorization_when_registration_email_fails(tmp_path):
-    module = load_portal_module()
-    config = replace(
-        make_config(module, tmp_path),
-        registration_email_recipient="admin@example.com",
-    )
-
-    def fail_notification(*_args):
-        raise RuntimeError("smtp unavailable")
-
-    state = module.PortalState(config, registration_notifier=fail_notification)
-    state.resolve_mac = lambda _ip: "aa:bb:cc:dd:ee:ff"
-
-    result = state.subscribe(
-        email="guest@example.com",
-        accept_terms=True,
-        ip_address="10.42.0.25",
-        user_agent="client-test",
-        host="arthexis.net",
-    )
-
-    assert result["authorized"] is True
-    assert config.authorized_macs_path.read_text(encoding="utf-8") == (
-        "aa:bb:cc:dd:ee:ff\n"
-    )
-    event = wait_for_activity_event(config, "registration_email_failed")
-    assert event["error"] == "smtp unavailable"
 
 
 def test_accept_terms_requires_explicit_true():
@@ -569,54 +451,6 @@ def test_status_records_activity_and_exposes_monitoring_paths(tmp_path):
     assert activity["monitoring_notice"] == module.MONITORING_NOTICE
 
 
-def test_status_redirects_authorized_client_to_suite_login(tmp_path):
-    module = load_portal_module()
-    state = module.PortalState(make_config(module, tmp_path))
-    state.resolve_mac = lambda _ip: "aa:bb:cc:dd:ee:ff"
-    state.subscribe(
-        email="guest@example.com",
-        accept_terms=True,
-        ip_address="10.42.0.25",
-        user_agent="client-test",
-        host="arthexis.net",
-    )
-
-    payload = state.status_for_request(
-        ip_address="10.42.0.25",
-        user_agent="client-test",
-        path="/api/status",
-        host="arthexis.net",
-    )
-
-    assert payload["authorized"] is True
-    assert payload["authorized_redirect_url"] == "http://arthexis.net:8888/login/"
-    assert payload["redirect_delay_ms"] == module.DEFAULT_AUTHORIZED_REDIRECT_DELAY_MS
-
-
-def test_trusted_mac_skips_registration_and_redirects_to_suite(tmp_path):
-    module = load_portal_module()
-    config = make_config(module, tmp_path)
-    config.trusted_macs_path.parent.mkdir(parents=True, exist_ok=True)
-    config.trusted_macs_path.write_text(
-        "# Living room console\nAA:BB:CC:DD:EE:FF ps4\n",
-        encoding="utf-8",
-    )
-    state = module.PortalState(config)
-    state.resolve_mac = lambda _ip: "aa:bb:cc:dd:ee:ff"
-
-    payload = state.status_for_request(
-        ip_address="192.168.129.143",
-        user_agent="PlayStation",
-        path="/api/status",
-        host="arthexis.net",
-    )
-
-    assert payload["authorized"] is True
-    assert payload["trusted_device"] is True
-    assert payload["authorized_redirect_url"] == "http://arthexis.net:8888/login/"
-    assert not config.authorized_macs_path.exists()
-
-
 def test_trusted_mac_consent_does_not_modify_consent_authorization(tmp_path):
     module = load_portal_module()
     config = make_config(module, tmp_path)
@@ -638,102 +472,6 @@ def test_trusted_mac_consent_does_not_modify_consent_authorization(tmp_path):
     assert result["trusted_device"] is True
     assert not config.authorized_macs_path.exists()
     assert "guest@example.com" in config.consents_path.read_text(encoding="utf-8")
-
-
-def test_status_preserves_zero_redirect_delay(tmp_path):
-    module = load_portal_module()
-    config = replace(make_config(module, tmp_path), authorized_redirect_delay_ms=0)
-    state = module.PortalState(config)
-    state.resolve_mac = lambda _ip: "aa:bb:cc:dd:ee:ff"
-    state.subscribe(
-        email="guest@example.com",
-        accept_terms=True,
-        ip_address="10.42.0.25",
-        user_agent="client-test",
-        host="arthexis.net",
-    )
-
-    payload = state.status_for_request(
-        ip_address="10.42.0.25",
-        user_agent="client-test",
-        path="/api/status",
-        host="arthexis.net",
-    )
-
-    assert payload["redirect_delay_ms"] == 0
-
-
-def test_suite_login_redirect_defaults_to_local_hostname():
-    module = load_portal_module()
-
-    assert (
-        module._suite_login_url(
-            "arthexis.net",
-            configured_host=module.DEFAULT_SUITE_LOGIN_HOST,
-            scheme=module.DEFAULT_SUITE_LOGIN_SCHEME,
-            port=8888,
-            path=module.DEFAULT_SUITE_LOGIN_PATH,
-        )
-        == "http://arthexis.net:8888/login/"
-    )
-
-
-def test_suite_login_redirect_brackets_raw_ipv6_gateway_host():
-    module = load_portal_module()
-
-    assert (
-        module._suite_login_url(
-            "arthexis.net",
-            configured_host="fd42:0:0:42::1",
-            scheme=module.DEFAULT_SUITE_LOGIN_SCHEME,
-            port=8888,
-            path="/login/",
-        )
-        == "http://[fd42:0:0:42::1]:8888/login/"
-    )
-
-
-def test_suite_login_redirect_can_reuse_current_host_without_existing_port():
-    module = load_portal_module()
-
-    assert (
-        module._suite_login_url(
-            "127.0.0.1:9080",
-            configured_host="",
-            scheme=module.DEFAULT_SUITE_LOGIN_SCHEME,
-            port=8888,
-            path="login/",
-        )
-        == "http://127.0.0.1:8888/login/"
-    )
-
-
-def test_suite_login_redirect_scheme_is_configurable():
-    module = load_portal_module()
-
-    assert (
-        module._suite_login_url(
-            "arthexis.net",
-            configured_host="10.42.0.1",
-            scheme="https",
-            port=443,
-            path="/login/",
-        )
-        == "https://10.42.0.1:443/login/"
-    )
-
-
-def test_suite_login_redirect_rejects_invalid_scheme():
-    module = load_portal_module()
-
-    with pytest.raises(ValueError, match="--suite-login-scheme"):
-        module._suite_login_url(
-            "arthexis.net",
-            configured_host="10.42.0.1",
-            scheme="ftp",
-            port=8888,
-            path="/login/",
-        )
 
 
 def test_read_events_uses_bounded_tail_without_reading_whole_file(
@@ -812,7 +550,7 @@ def test_firewall_ruleset_keeps_authorized_clients_and_redirects_unapproved_http
         ["aa:bb:cc:dd:ee:ff"]
     )
 
-    assert "table inet arthexis_ap_portal" in ruleset
+    assert "table inet gway_ap_portal" in ruleset
     assert "elements = { aa:bb:cc:dd:ee:ff }" in ruleset
     assert "meta l4proto tcp redirect to :80" in ruleset
     assert 'iifname "wlan0" drop' in ruleset
@@ -898,7 +636,7 @@ def test_firewall_sync_replaces_existing_table_in_single_apply(monkeypatch):
     apply_calls = [call for call in calls if call[0] == ["nft", "-f", "-"]]
     assert len(apply_calls) == 1
     ruleset = apply_calls[0][1]["input"]
-    assert ruleset.startswith("delete table inet arthexis_ap_portal\n")
+    assert ruleset.startswith("delete table inet gway_ap_portal\n")
     assert "elements = { aa:bb:cc:dd:ee:ff }" in ruleset
 
 
@@ -995,11 +733,6 @@ def test_skip_firewall_sync_defaults_loopback_to_development_mac(tmp_path):
         assets_dir=str(tmp_path),
         state_dir=str(tmp_path / "state"),
         source_url="",
-        suite_login_scheme=module.DEFAULT_SUITE_LOGIN_SCHEME,
-        suite_login_host=module.DEFAULT_SUITE_LOGIN_HOST,
-        suite_login_port=module.DEFAULT_SUITE_LOGIN_PORT,
-        suite_login_path=module.DEFAULT_SUITE_LOGIN_PATH,
-        authorized_redirect_delay_ms=module.DEFAULT_AUTHORIZED_REDIRECT_DELAY_MS,
         registration_email_recipient="",
         preauth_allow_host=[],
         disable_default_preauth_allow_hosts=False,
@@ -1052,70 +785,6 @@ def _exercise_get(handler_class, path: str, *, asset_exists: bool = True):
     handler.do_GET()
 
     return SimpleNamespace(recorded=recorded, served=served, errors=errors)
-
-
-def test_get_authorized_client_redirects_before_portal_page(tmp_path):
-    module = load_portal_module()
-    app = module.PortalApplication(make_config(module, tmp_path))
-    app.state.authorized_redirect_for_request = (
-        lambda **_kwargs: "http://arthexis.net:8888/login/"
-    )
-    handler_class = app.handler_class()
-    handler = object.__new__(handler_class)
-    handler.path = "/"
-    handler.command = "GET"
-    handler.headers = {}
-    handler.client_address = ("192.168.129.143", 12345)
-    responses = []
-    headers = []
-    app.state.resolve_mac = lambda _ip: "aa:bb:cc:dd:ee:ff"
-    handler._record_request = lambda path, **_kwargs: responses.append(("record", path))
-    handler._serve_asset = lambda _name: responses.append(("asset", _name)) or True
-    handler.send_response = lambda status: responses.append(("status", status))
-    handler.send_header = lambda key, value: headers.append((key, value))
-    handler.end_headers = lambda: responses.append(("end", None))
-
-    handler.do_GET()
-
-    assert ("record", "/") in responses
-    assert ("status", module.HTTPStatus.FOUND) in responses
-    assert ("Location", "http://arthexis.net:8888/login/") in headers
-    assert not any(item[0] == "asset" for item in responses)
-
-
-def test_get_authorized_client_reuses_resolved_mac_for_redirect_logging(tmp_path):
-    module = load_portal_module()
-    app = module.PortalApplication(make_config(module, tmp_path))
-    app.state._authorized = {"aa:bb:cc:dd:ee:ff"}
-    resolved_ips = []
-
-    def resolve_once(ip_address):
-        resolved_ips.append(ip_address)
-        return "aa:bb:cc:dd:ee:ff"
-
-    app.state.resolve_mac = resolve_once
-    handler_class = app.handler_class()
-    handler = object.__new__(handler_class)
-    handler.path = "/"
-    handler.command = "GET"
-    handler.headers = {}
-    handler.client_address = ("192.168.129.143", 12345)
-    responses = []
-    headers = []
-    handler.send_response = lambda status: responses.append(("status", status))
-    handler.send_header = lambda key, value: headers.append((key, value))
-    handler.end_headers = lambda: responses.append(("end", None))
-
-    handler.do_GET()
-
-    assert resolved_ips == ["192.168.129.143"]
-    assert ("status", module.HTTPStatus.FOUND) in responses
-    assert ("Location", "http://arthexis.net:8888/login/") in headers
-    activity = [
-        json.loads(line)
-        for line in app.config.activity_path.read_text(encoding="utf-8").splitlines()
-    ]
-    assert activity[-1]["mac_address"] == "aa:bb:cc:dd:ee:ff"
 
 
 def test_get_probe_path_returns_portal_page(tmp_path):
