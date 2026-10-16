@@ -58,3 +58,38 @@ def test_nmcli_is_read_only(monkeypatch):
     monkeypatch.setattr(module.subprocess, "run", run)
     assert module.profiles() == []
     assert all("modify" not in c and "up" not in c and "down" not in c for c in calls)
+
+
+def test_profiles_from_mock_networkmanager(monkeypatch):
+    responses = {
+        ("-g", "UUID", "connection", "show"): "wifi-client\\nap-one\\nap-two",
+        ("-g", "connection.type", "connection", "show", "uuid", "wifi-client"): "802-11-wireless",
+        ("-g", "802-11-wireless.mode", "connection", "show", "uuid", "wifi-client"): "infrastructure",
+        ("-g", "connection.type", "connection", "show", "uuid", "ap-one"): "802-11-wireless",
+        ("-g", "802-11-wireless.mode", "connection", "show", "uuid", "ap-one"): "ap",
+        ("-g", "connection.id", "connection", "show", "uuid", "ap-one"): "Office:AP",
+        ("-g", "802-11-wireless.ssid", "connection", "show", "uuid", "ap-one"): "Office WiFi",
+        ("-g", "connection.type", "connection", "show", "uuid", "ap-two"): "802-11-wireless",
+        ("-g", "802-11-wireless.mode", "connection", "show", "uuid", "ap-two"): "ap",
+        ("-g", "connection.id", "connection", "show", "uuid", "ap-two"): "Backup",
+        ("-g", "802-11-wireless.ssid", "connection", "show", "uuid", "ap-two"): "Backup SSID",
+        ("-g", "UUID,DEVICE", "connection", "show", "--active"): "ap-one:wlan0",
+    }
+    monkeypatch.setattr(module, "nmcli", lambda *args: responses[args])
+    items = module.profiles()
+    assert len(items) == 2
+    assert module.discover(items)["ap"] == {
+        "uuid": "ap-one", "name": "Office:AP", "ssid": "Office WiFi",
+        "active": True, "interface": "wlan0",
+    }
+
+
+def test_networkmanager_failure_is_not_hidden(monkeypatch):
+    class Result:
+        returncode = 10
+        stderr = "NetworkManager is not running"
+        stdout = ""
+    monkeypatch.setattr(module.subprocess, "run", lambda *args, **kwargs: Result())
+    import pytest
+    with pytest.raises(module.DiscoveryError, match="not running"):
+        module.profiles()
