@@ -23,7 +23,7 @@ def profiles():
     uuids = nmcli("-g", "UUID", "connection", "show").splitlines()
     found = []
     for uuid in filter(None, uuids):
-        kind, mode, name, ssid = (nmcli("-g", "connection.type,802-11-wireless.mode,connection.id,802-11-wireless.ssid", "connection", "show", "uuid", uuid).splitlines() + [""] * 4)[:4]
+        kind = nmcli("-g", "connection.type", "connection", "show", "uuid", uuid)\n        if kind not in ("802-11-wireless", "wifi"):\n            continue\n        mode = nmcli("-g", "802-11-wireless.mode", "connection", "show", "uuid", uuid)\n        if mode != "ap":\n            continue\n        name = nmcli("-g", "connection.id", "connection", "show", "uuid", uuid)\n        ssid = nmcli("-g", "802-11-wireless.ssid", "connection", "show", "uuid", uuid)
         if kind not in ("802-11-wireless", "wifi") or mode != "ap":
             continue
         found.append({"uuid": uuid, "name": name, "ssid": ssid, "active": False, "interface": None})
