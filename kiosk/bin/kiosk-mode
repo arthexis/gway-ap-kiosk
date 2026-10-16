@@ -2,9 +2,9 @@
 set -Eeuo pipefail
 
 BASTION_CHECK="${KIOSK_BASTION_CHECK:-/usr/local/libexec/bastion-key-present}"
-MANUAL_STATE_FILE="${KIOSK_MANUAL_STATE_FILE:-/run/user/1000/arthexis-hdmi-kiosk/manual-enabled}"
-LAYOUT_SERVICE="${KIOSK_LAYOUT_SERVICE:-arthexis-hdmi-kiosk-layout.service}"
-KIOSK_SERVICE="${KIOSK_SERVICE:-arthexis-hdmi-kiosk.service}"
+MANUAL_STATE_FILE="${KIOSK_MANUAL_STATE_FILE:-/run/user/1000/gway-hdmi-kiosk/manual-enabled}"
+LAYOUT_SERVICE="${KIOSK_LAYOUT_SERVICE:-gway-hdmi-kiosk-layout.service}"
+KIOSK_SERVICE="${KIOSK_SERVICE:-gway-hdmi-kiosk.service}"
 
 notify() {
   local message="$1"
