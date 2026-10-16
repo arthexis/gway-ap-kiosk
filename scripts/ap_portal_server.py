@@ -66,7 +66,7 @@ TERMS_STATEMENT = (
     "for quality of life purposes while using this access point."
 )
 MONITORING_NOTICE = (
-    "Your activities on this AP ARE being monitored. GWAY records gateway-visible "
+    "Your activities on this AP ARE being monitored. This gateway records "
     "connection metadata, portal requests, device identifiers, consent submissions, "
     "and authorization state for diagnostics, safety, and quality-of-life purposes."
 )
@@ -478,18 +478,12 @@ class PortalState:
     def __init__(
         self,
         config: PortalConfig,
-        *,
-        registration_notifier: Callable[
-            [PortalConfig, dict[str, Any], bool, bool], bool
-        ]
-        | None = None,
     ) -> None:
         self.config = config
         self._lock = threading.RLock()
         self._firewall = FirewallManager(
             preauth_allow_entries=config.preauth_allow_entries
         )
-        self._registration_notifier = registration_notifier or _send_registration_email
         self.activity = ActivityRecorder(config)
         self._authorized = _read_authorized_macs(self.config.authorized_macs_path)
         self._trusted = _read_trusted_macs(self.config.trusted_macs_path)
@@ -793,8 +787,6 @@ class PortalApplication:
                     return
 
                 if request_path in {"", "/"}:
-                    if self._redirect_authorized_request(request_path):
-                        return
                     self._serve_portal_page(request_path or "/")
                     return
                 if request_path.startswith("/api/"):
@@ -802,8 +794,6 @@ class PortalApplication:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
                 if request_path in CAPTIVE_PORTAL_PROBE_PATHS:
-                    if self._redirect_authorized_request(request_path):
-                        return
                     self._serve_portal_page(request_path)
                     return
                 asset_name = request_path.lstrip("/")
@@ -815,8 +805,6 @@ class PortalApplication:
                         self._record_request(request_path)
                         if not self._serve_asset(asset_name):
                             self.send_error(HTTPStatus.NOT_FOUND)
-                        return
-                    if self._redirect_authorized_request(request_path):
                         return
                     self._serve_portal_page(request_path)
                     return
