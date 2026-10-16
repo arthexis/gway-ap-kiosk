@@ -91,7 +91,6 @@ NEW_SCRIPT_CONTINUE_EXIT = 75
 RFID_SERVICE_UNIT = os.environ.get("RFID_MODE_RFID_SERVICE_UNIT", "")
 LCD_SERVICE_UNIT = os.environ.get("RFID_MODE_LCD_SERVICE_UNIT", "")
 SOUND_HOOK = Path(os.path.expandvars(os.path.expanduser(os.environ.get("RFID_MODE_SOUND_HOOK", "/home/arthe/.local/bin/codex-sound-hook"))))
-GADGET_ARM = Path(os.path.expandvars(os.path.expanduser(os.environ.get("RFID_MODE_GADGET_ARM", "/home/arthe/.local/bin/gway-gadget-arm"))))
 RUN_SOUND = os.environ.get("RFID_MODE_SOUND_RUN", "attention")
 COPY_COMPLETE_SOUND = os.environ.get("RFID_MODE_SOUND_COPY_COMPLETE", "ok")
 FACTORY_KEY_BYTES = [0xFF] * 6
@@ -540,33 +539,10 @@ class ModeRunner:
         request = control / f"clear-{time.time_ns()}-{os.getpid()}.json"
         atomic_write_json(request, {"requested_at": now_iso(), "reason": reason})
 
-    def clear_gadget_arm(self, *, reason: str) -> None:
-        """Clear pending gadget mode along with an explicit queue clear.
-
-        This includes the queue-aware five-minute flag and its LCD high lock;
-        the helper remains the single owner of the gadget-state contract.
-        """
-        if not GADGET_ARM.is_file():
-            self.log("gadget_clear_skipped", reason=reason, error="gadget_arm_not_found")
-            return
-        try:
-            result = subprocess.run(
-                [str(GADGET_ARM), "--cancel"],
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-            )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            self.log("gadget_clear_failed", reason=reason, error=str(exc))
-            return
-        self.log("gadget_cleared" if result.returncode == 0 else "gadget_clear_failed", reason=reason, returncode=result.returncode)
-
     def process_queue_controls(self) -> None:
         for request in sorted(self.queue_paths("control").glob("clear-*.json")):
             payload = read_json(request) or {}
             self.clear_pending_queue()
-            self.clear_gadget_arm(reason=str(payload.get("reason") or "unspecified"))
             try:
                 request.unlink()
             except OSError as exc:

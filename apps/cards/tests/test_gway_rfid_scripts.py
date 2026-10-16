@@ -286,14 +286,9 @@ def test_queue_runs_one_card_action_at_a_time(tmp_path):
     assert len(list((queue_dir / "done").glob("*.json"))) == 2
 
 
-def test_queue_clear_cancels_pending_gadget_arm(tmp_path, monkeypatch):
+def test_queue_clear_leaves_no_control_or_pending_records(tmp_path):
     config_dir = tmp_path / "rfid-modes"
     queue_dir = tmp_path / "queue"
-    gadget_arm = tmp_path / "gway-gadget-arm"
-    marker = tmp_path / "gadget-cancelled"
-    gadget_arm.write_text(f"#!/usr/bin/env bash\ntouch {marker}\n", encoding="utf-8")
-    gadget_arm.chmod(0o755)
-    monkeypatch.setattr(mode_runner, "GADGET_ARM", gadget_arm)
     control = queue_dir / "control"
     pending = queue_dir / "pending"
     control.mkdir(parents=True)
@@ -311,6 +306,5 @@ def test_queue_clear_cancels_pending_gadget_arm(tmp_path, monkeypatch):
 
     runner.process_queue_controls()
 
-    assert marker.exists()
     assert not list(pending.glob("*.json"))
     assert not list(control.glob("clear-*.json"))

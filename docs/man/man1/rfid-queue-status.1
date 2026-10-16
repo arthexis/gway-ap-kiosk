@@ -1,13 +1,13 @@
 .TH RFID-QUEUE-STATUS 1 "2026-08-30" "GWAY local tools" "User Commands"
 .SH NAME
-rfid-queue-status \- show UID-safe RFID queue and gadget-arm state
+rfid-queue-status \- show UID-safe RFID queue state
 .SH SYNOPSIS
 .B rfid-queue-status
 .RI [ --json ]
 .SH DESCRIPTION
 .B rfid-queue-status
-reports counts for active and historical RFID queue lanes, the mapped label of
-the active or waiting interrupt command, and queue-aware USB gadget-arm state.
+reports counts for active and historical RFID queue lanes and the mapped label
+of the active or waiting interrupt command.
 It does not print RFID card identifiers or queue event identifiers.
 .SH OPTIONS
 .TP
@@ -28,4 +28,3 @@ Read queue-aware gadget arm state from FILE.
 .SH SEE ALSO
 .BR rfid-mode-runner (1),
 .BR rfid-scan-publisher (1),
-.BR gway-gadget-arm (1)

@@ -66,7 +66,7 @@ New command cards are queue-first one-shots. Register `--interrupt` only for
 control actions that must preempt work; `--clear-queue` also cancels a pending
 queue-aware gadget arm. `--consume-next-seconds N` lets a card intentionally
 consume the next queued command. Use `rfid-queue-status` for UID-safe counts,
-active command labels, waiting interrupts, and gadget-arm state.
+active command labels and waiting interrupts.
 
 ## Physical Steps
 

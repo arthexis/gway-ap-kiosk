@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Show UID-safe local RFID queue and queue-aware gadget state."""
+"""Show UID-safe local RFID queue state."""
 
 from __future__ import annotations
 
@@ -15,7 +15,6 @@ HOME = Path(os.environ.get("HOME", "/home/arthe"))
 DEFAULT_QUEUE_DIR = HOME / ".local/state/rfid-mode/queue"
 DEFAULT_RUNNER_STATE = HOME / ".config/rfid-modes/state/state.json"
 DEFAULT_CARDS_DIR = HOME / ".config/rfid-modes/cards"
-DEFAULT_GADGET_STATE = HOME / ".local/state/gway-gadget/queue-arm.json"
 MODE_LABEL_RE = re.compile(r"^\s*#\s*RFID mode:\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
 
 
@@ -57,12 +56,10 @@ def status(args: argparse.Namespace) -> dict[str, Any]:
     processing = sorted((args.queue_dir / "processing").glob("*.json"))
     interrupts = sorted((args.queue_dir / "interrupt").glob("*.json"))
     runner = read_json(args.runner_state)
-    gadget = read_json(args.gadget_state)
     return {
         "queue": {"counts": counts, "active": bool(processing), "active_label": label_for_record(processing[0], args.cards_dir) if processing else ""},
         "interrupt": {"waiting": bool(interrupts), "next_label": label_for_record(interrupts[0], args.cards_dir) if interrupts else ""},
         "runner": {"active": bool(runner.get("queue_active_file")), "updated_at": str(runner.get("updated_at") or "")},
-        "gadget_arm": {"active": bool(gadget), "mode": str(gadget.get("mode") or ""), "state": str(gadget.get("state") or ""), "expires_at": str(gadget.get("expires_at") or "")},
     }
 
 
@@ -71,7 +68,6 @@ def main() -> int:
     parser.add_argument("--queue-dir", type=Path, default=DEFAULT_QUEUE_DIR)
     parser.add_argument("--runner-state", type=Path, default=DEFAULT_RUNNER_STATE)
     parser.add_argument("--cards-dir", type=Path, default=DEFAULT_CARDS_DIR)
-    parser.add_argument("--gadget-state", type=Path, default=DEFAULT_GADGET_STATE)
     parser.add_argument("--json", action="store_true", help="print structured status")
     args = parser.parse_args()
     payload = status(args)
@@ -84,8 +80,6 @@ def main() -> int:
             print(f"Active: {payload['queue']['active_label']}")
         if payload["interrupt"]["waiting"]:
             print(f"Interrupt waiting: {payload['interrupt']['next_label']}")
-        gadget = payload["gadget_arm"]
-        print(f"Gadget arm: {'active' if gadget['active'] else 'inactive'}" + (f" ({gadget['mode']})" if gadget["mode"] else ""))
     return 0
 
 
