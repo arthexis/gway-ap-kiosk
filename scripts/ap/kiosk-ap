@@ -1,0 +1,70 @@
+#!/usr/bin/env python3
+"""Read-only discovery of NetworkManager Wi-Fi access-point profiles."""
+import argparse
+import json
+import os
+import subprocess
+import sys
+
+
+class DiscoveryError(Exception):
+    pass
+
+
+def nmcli(*args):
+    result = subprocess.run(["nmcli", "--terse", "--escape", "no", *args], capture_output=True, text=True, check=False)
+    if result.returncode:
+        raise DiscoveryError(result.stderr.strip() or "NetworkManager unavailable")
+    return result.stdout.strip()
+
+
+def profiles():
+    # UUIDs avoid parsing profile names, which may contain colons.
+    uuids = nmcli("-g", "UUID", "connection", "show").splitlines()
+    found = []
+    for uuid in filter(None, uuids):
+        kind, mode, name, ssid = (nmcli("-g", "connection.type,802-11-wireless.mode,connection.id,802-11-wireless.ssid", "connection", "show", "uuid", uuid).splitlines() + [""] * 4)[:4]
+        if kind not in ("802-11-wireless", "wifi") or mode != "ap":
+            continue
+        found.append({"uuid": uuid, "name": name, "ssid": ssid, "active": False, "interface": None})
+    active = nmcli("-g", "UUID,DEVICE", "connection", "show", "--active")
+    # Active connection UUIDs are unambiguous; DEVICE is advisory.
+    for line in active.splitlines():
+        uuid, _, device = line.partition(":")
+        for item in found:
+            if item["uuid"] == uuid:
+                item["active"] = True
+                item["interface"] = device or None
+    return found
+
+
+def discover(items, selected_uuid=None):
+    selected_uuid = (selected_uuid or "").strip()
+    if selected_uuid:
+        matches = [item for item in items if item["uuid"] == selected_uuid]
+        return {"state": "selected" if matches else "invalid_selection", "ap": matches[0] if matches else None}
+    active = [item for item in items if item["active"]]
+    candidates = active or items
+    if not candidates:
+        return {"state": "not_configured", "ap": None}
+    if len(candidates) > 1:
+        return {"state": "ambiguous", "ap": None, "candidate_uuids": [x["uuid"] for x in candidates]}
+    return {"state": "selected", "ap": candidates[0]}
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Discover a NetworkManager access point without changing it")
+    parser.add_argument("command", choices=("detect", "status"))
+    args = parser.parse_args()
+    try:
+        result = discover(profiles(), os.environ.get("KIOSK_AP_CONNECTION_UUID"))
+    except (DiscoveryError, OSError) as exc:
+        result = {"state": "unavailable", "ap": None, "error": str(exc)}
+    if args.command == "status" and result["ap"]:
+        result["connection_state"] = "active" if result["ap"]["active"] else "inactive"
+    print(json.dumps(result, sort_keys=True))
+    return 0 if result["state"] in ("selected", "not_configured") else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
