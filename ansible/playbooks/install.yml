@@ -24,8 +24,8 @@
       loop:
         - { src: kiosk/bin/gway-kiosk-status, dest: /home/arthe/.local/bin/gway-kiosk-status }
         - { src: kiosk/bin/kiosk-mode, dest: /home/arthe/.local/bin/kiosk-mode }
-        - { src: kiosk/sbin/arthexis-hdmi-kiosk-session, dest: /usr/local/sbin/arthexis-hdmi-kiosk-session }
-        - { src: kiosk/sbin/arthexis-hdmi-kiosk-layout, dest: /usr/local/sbin/arthexis-hdmi-kiosk-layout }
+        - { src: kiosk/sbin/gway-hdmi-kiosk-session, dest: /usr/local/sbin/gway-hdmi-kiosk-session }
+        - { src: kiosk/sbin/gway-hdmi-kiosk-layout, dest: /usr/local/sbin/gway-hdmi-kiosk-layout }
         - { src: kiosk/libexec/gway-boot-stagger-until, dest: /usr/local/libexec/gway-boot-stagger-until }
         - { src: scripts/ap/kiosk-ap, dest: /usr/local/sbin/kiosk-ap }
 
@@ -50,8 +50,8 @@
         mode: "0644"
       loop:
         - gway-kiosk-status.service
-        - arthexis-hdmi-kiosk.service
-        - arthexis-hdmi-kiosk-layout.service
+        - gway-hdmi-kiosk.service
+        - gway-hdmi-kiosk-layout.service
       notify: Reload systemd
 
     - name: Install default kiosk configuration only on fresh installation
@@ -64,8 +64,8 @@
         mode: "0644"
         force: false
       loop:
-        - { src: arthexis-hdmi-kiosk.example, dest: arthexis-hdmi-kiosk }
-        - { src: arthexis-hdmi-kiosk-layout.example, dest: arthexis-hdmi-kiosk-layout }
+        - { src: gway-hdmi-kiosk.example, dest: gway-hdmi-kiosk }
+        - { src: gway-hdmi-kiosk-layout.example, dest: gway-hdmi-kiosk-layout }
 
     - name: Reload service manager before enabling kiosk status
       ansible.builtin.meta: flush_handlers
