@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only discovery of NetworkManager Wi-Fi access-point profiles."""
+"""Discover and explicitly manage NetworkManager Wi-Fi access points."""
 import argparse
 import json
 import os
@@ -74,8 +74,12 @@ def reveal_password(ap):
 
 
 def rotate_password(ap):
-    if not ap["active"]:
-        raise DiscoveryError("AP must be active to rotate its password")
+    """Update only the selected profile, then attempt a non-disruptive reapply.
+
+    A failed reapply is reported without restarting the AP or exposing its PSK.
+    """
+    if not ap["active"] or not ap["interface"]:
+        raise DiscoveryError("AP must be active with a known interface to rotate its password")
     password = "".join(secrets.choice(ALPHABET) for _ in range(16))
     result = subprocess.run(
         ["nmcli", "connection", "modify", "uuid", ap["uuid"], "802-11-wireless-security.psk", password],
@@ -83,6 +87,12 @@ def rotate_password(ap):
     )
     if result.returncode:
         raise DiscoveryError("Unable to update selected AP credentials")
+    result = subprocess.run(
+        ["nmcli", "device", "reapply", ap["interface"]],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode:
+        raise DiscoveryError("AP password saved to profile, but live reapply failed; activation is pending")
     return password
 
 
