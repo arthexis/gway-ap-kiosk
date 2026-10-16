@@ -12,17 +12,20 @@ kiosk = importlib.util.module_from_spec(spec)
 loader.exec_module(kiosk)
 
 
-def test_missing_ap_state_still_renders(monkeypatch, tmp_path):
-    monkeypatch.setenv("GWAY_KIOSK_AP_PASSWORD_FILE", str(tmp_path / "absent"))
-    assert kiosk.build_payload()["ap"]["available"] is False
-    assert "GWAY Kiosk" in kiosk.render_html(kiosk.build_payload())
+def test_missing_ap_state_still_renders():
+    with patch.object(Path, "is_file", return_value=False):
+        assert kiosk.build_payload()["ap"]["available"] is False
+        assert "GWAY Kiosk" in kiosk.render_html(kiosk.build_payload())
 
 
-def test_ap_credentials_never_disclosed_in_json_or_html(monkeypatch, tmp_path):
-    credentials = tmp_path / "ap-state"
-    credentials.write_text("SSID=TEST-AP\nPASSWORD=super-private-test-value\nINTERFACE=wlan0\n")
-    monkeypatch.setenv("GWAY_KIOSK_AP_PASSWORD_FILE", str(credentials))
-    payload = kiosk.build_payload()
+def test_ap_credentials_never_disclosed_in_json_or_html():
+    response = json.dumps({
+        "state": "selected",
+        "ap": {"ssid": "TEST-AP", "interface": "wlan0", "password": "super-private-test-value"},
+    })
+    with patch.object(Path, "is_file", return_value=True), patch.object(kiosk.subprocess, "run") as run:
+        run.return_value.stdout = response
+        payload = kiosk.build_payload()
     assert payload["ap"]["ssid"] == "TEST-AP"
     assert "super-private-test-value" not in json.dumps(payload)
     assert "super-private-test-value" not in kiosk.render_html(payload)
@@ -51,4 +54,4 @@ def test_rotation_not_display_dependent():
     with patch.object(Path, "is_file", return_value=True), patch.object(kiosk.os, "access", return_value=True), patch.object(kiosk.subprocess, "run") as run:
         run.return_value.returncode = 0
         assert kiosk.reset_access_point()
-    assert run.call_args.args[0] == [str(kiosk.AP_ROTATE_COMMAND)]
+    assert run.call_args.args[0] == ["sudo", "-n", str(kiosk.AP_ROTATE_COMMAND), "rotate"]
