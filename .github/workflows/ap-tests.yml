@@ -37,7 +37,7 @@ jobs:
           sudo install -d -o arthe -g arthe /home/arthe/.local/bin
           sudo install -d /usr/local/libexec
       - name: Deploy through the production entrypoint
-        run: sudo ./deploy.sh
+        run: sudo bash ./deploy.sh
       - name: Verify installed service and permissions
         run: |
           systemctl is-enabled --quiet gway-kiosk-status.service
@@ -47,7 +47,7 @@ jobs:
           test "$(stat -c %a /etc/sudoers.d/gway-kiosk-ap)" = 440
           sudo visudo -cf /etc/sudoers.d/gway-kiosk-ap
       - name: Repeat regular deployment
-        run: sudo ./deploy.sh
+        run: sudo bash ./deploy.sh
       - name: Verify service remains healthy
         run: |
           systemctl is-active --quiet gway-kiosk-status.service
