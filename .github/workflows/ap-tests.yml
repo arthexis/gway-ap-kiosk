@@ -23,3 +23,32 @@ jobs:
         run: python -m pytest -q --durations=0 --durations-min=0.001 tests/test_kiosk_ap_reset.py tests/test_kiosk_independence.py tests/test_kiosk_ap_discovery.py tests/test_ap_portal_server.py tests/test_kiosk_ap_security.py
       - name: Shell syntax
         run: bash -n deploy.sh
+  ansible-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ansible and prepare fresh appliance account
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible sudo
+          sudo useradd --create-home --shell /bin/bash arthe
+          sudo install -d -o arthe -g arthe /home/arthe/.local/bin
+          sudo install -d /usr/local/libexec
+      - name: Deploy through the production entrypoint
+        run: sudo ./deploy.sh
+      - name: Verify installed service and permissions
+        run: |
+          systemctl is-enabled --quiet gway-kiosk-status.service
+          systemctl is-active --quiet gway-kiosk-status.service
+          curl --fail --silent --show-error http://127.0.0.1:8899/kiosk/status/data/ > /dev/null
+          test -x /usr/local/sbin/kiosk-ap
+          test "$(stat -c %a /etc/sudoers.d/gway-kiosk-ap)" = 440
+          sudo visudo -cf /etc/sudoers.d/gway-kiosk-ap
+      - name: Repeat regular deployment
+        run: sudo ./deploy.sh
+      - name: Verify service remains healthy
+        run: |
+          systemctl is-active --quiet gway-kiosk-status.service
+          curl --fail --silent --show-error http://127.0.0.1:8899/kiosk/status/data/ > /dev/null
