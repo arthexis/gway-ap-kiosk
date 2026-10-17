@@ -14,6 +14,19 @@
         database: passwd
         key: "{{ kiosk_user }}"
 
+    - name: Prepare kiosk executable directories
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - "{{ kiosk_home }}/.local/bin"
+        - /usr/local/sbin
+        - /usr/local/libexec
+
     - name: Install kiosk and AP runtime executables
       become: true
       ansible.builtin.copy:
@@ -55,6 +68,18 @@
         - gway-hdmi-kiosk-layout.service
       notify: Reload systemd
 
+    - name: Prepare GWAY HDMI systemd drop-in directories
+      become: true
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - gway-hdmi-kiosk.service.d
+        - gway-hdmi-kiosk-layout.service.d
+
     - name: Install GWAY HDMI unit drop-ins
       become: true
       ansible.builtin.copy:
@@ -77,6 +102,16 @@
         - /usr/lib/systemd/system/bastion-usb-refresh.service
         - /lib/systemd/system/bastion-usb-refresh.service
       register: bastion_refresh_units
+
+    - name: Prepare optional Bastion USB drop-in directory
+      become: true
+      ansible.builtin.file:
+        path: /etc/systemd/system/bastion-usb-refresh.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: bastion_refresh_units.results | selectattr('stat.exists') | list | length > 0
 
     - name: Integrate with installed Bastion USB refresh service
       become: true
