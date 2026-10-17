@@ -4,6 +4,7 @@
   connection: local
   gather_facts: true
   vars:
+    kiosk_ci_mode: false
     kiosk_user: arthe
     kiosk_home: /home/arthe
     project_root: "{{ playbook_dir }}/../.."
@@ -12,6 +13,19 @@
       ansible.builtin.getent:
         database: passwd
         key: "{{ kiosk_user }}"
+
+    - name: Prepare kiosk executable directories
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - "{{ kiosk_home }}/.local/bin"
+        - /usr/local/sbin
+        - /usr/local/libexec
 
     - name: Install kiosk and AP runtime executables
       become: true
@@ -54,6 +68,62 @@
         - gway-hdmi-kiosk-layout.service
       notify: Reload systemd
 
+    - name: Prepare GWAY HDMI systemd drop-in directories
+      become: true
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - gway-hdmi-kiosk.service.d
+        - gway-hdmi-kiosk-layout.service.d
+
+    - name: Install GWAY HDMI unit drop-ins
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/kiosk/systemd/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - gway-hdmi-kiosk.service.d/98-boot-stagger-30s.conf
+        - gway-hdmi-kiosk-layout.service.d/20-bastion-refresh-order.conf
+        - gway-hdmi-kiosk-layout.service.d/98-boot-stagger-30s.conf
+      notify: Reload systemd
+
+    - name: Detect optional Bastion USB refresh service
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/systemd/system/bastion-usb-refresh.service
+        - /usr/lib/systemd/system/bastion-usb-refresh.service
+        - /lib/systemd/system/bastion-usb-refresh.service
+      register: bastion_refresh_units
+
+    - name: Prepare optional Bastion USB drop-in directory
+      become: true
+      ansible.builtin.file:
+        path: /etc/systemd/system/bastion-usb-refresh.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: bastion_refresh_units.results | selectattr('stat.exists') | list | length > 0
+
+    - name: Integrate with installed Bastion USB refresh service
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/kiosk/systemd/bastion-usb-refresh.service.d/60-kiosk-layout.conf"
+        dest: /etc/systemd/system/bastion-usb-refresh.service.d/60-kiosk-layout.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: bastion_refresh_units.results | selectattr('stat.exists') | list | length > 0
+      notify: Reload systemd
+
     - name: Install default kiosk configuration only on fresh installation
       become: true
       ansible.builtin.copy:
@@ -68,9 +138,11 @@
         - { src: gway-hdmi-kiosk-layout.example, dest: gway-hdmi-kiosk-layout }
 
     - name: Reload service manager before enabling kiosk status
+      when: not kiosk_ci_mode | bool
       ansible.builtin.meta: flush_handlers
 
     - name: Enable and start standalone kiosk status
+      when: not kiosk_ci_mode | bool
       become: true
       ansible.builtin.systemd_service:
         name: gway-kiosk-status.service
@@ -78,6 +150,7 @@
         state: started
 
     - name: Check standalone kiosk HTTP response
+      when: not kiosk_ci_mode | bool
       ansible.builtin.uri:
         url: http://127.0.0.1:8899/kiosk/status/data/
         return_content: false
@@ -89,6 +162,7 @@
 
   handlers:
     - name: Reload systemd
+      when: not kiosk_ci_mode | bool
       become: true
       ansible.builtin.systemd_service:
         daemon_reload: true
