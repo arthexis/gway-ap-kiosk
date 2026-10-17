@@ -25,18 +25,35 @@ jobs:
         run: ansible-playbook --syntax-check -i localhost, ansible/playbooks/install.yml
       - name: Shell syntax
         run: bash -n deploy.sh
-      - name: Prepare clean appliance operator
+  ansible-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ansible and prepare fresh appliance account
         run: |
-          if ! id arthe >/dev/null 2>&1; then
-            sudo useradd --create-home --shell /bin/bash arthe
-          fi
-      - name: Application deploy (fresh install, fail forward)
-        run: sudo env "PATH=$PATH" bash ./deploy.sh --extra-vars kiosk_ci_mode=true -v
-      - name: Verify installed application files
+          sudo apt-get update
+          sudo apt-get install -y ansible sudo
+          sudo useradd --create-home --shell /bin/bash arthe
+      - name: Deploy through the production entrypoint
+        run: sudo bash ./deploy.sh
+      - name: Verify installed service and permissions
         run: |
+          systemctl is-enabled --quiet gway-kiosk-status.service
+          systemctl is-active --quiet gway-kiosk-status.service
+          curl --fail --silent --show-error http://127.0.0.1:8899/kiosk/status/data/ > /dev/null
           test -x /usr/local/sbin/kiosk-ap
           test -x /usr/local/sbin/gway-hdmi-kiosk-session
           test -x /usr/local/sbin/gway-hdmi-kiosk-layout
           test -f /etc/systemd/system/gway-hdmi-kiosk.service
           test -f /etc/systemd/system/gway-hdmi-kiosk-layout.service.d/20-bastion-refresh-order.conf
           test -f /etc/default/gway-hdmi-kiosk
+          test "$(sudo stat -c %a /etc/sudoers.d/gway-kiosk-ap)" = 440
+          sudo visudo -cf /etc/sudoers.d/gway-kiosk-ap
+      - name: Repeat regular deployment
+        run: sudo bash ./deploy.sh
+      - name: Verify service remains healthy
+        run: |
+          systemctl is-active --quiet gway-kiosk-status.service
+          curl --fail --silent --show-error http://127.0.0.1:8899/kiosk/status/data/ > /dev/null
