@@ -31,7 +31,7 @@ jobs:
             sudo useradd --create-home --shell /bin/bash arthe
           fi
       - name: Application deploy (fresh install, fail forward)
-        run: sudo ./deploy.sh --extra-vars kiosk_ci_mode=true -v
+        run: sudo env "PATH=$PATH" bash ./deploy.sh --extra-vars kiosk_ci_mode=true -v
       - name: Verify installed application files
         run: |
           test -x /usr/local/sbin/kiosk-ap
