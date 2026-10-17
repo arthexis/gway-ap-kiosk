@@ -25,17 +25,12 @@ BASE_DIR = Path(__file__).resolve().parents[1]
 ASSETS_DIR = BASE_DIR / "config" / "data" / "ap_portal"
 DEFAULT_STATE_DIR = BASE_DIR / ".state" / "ap_portal"
 DEFAULT_SOURCE_URL = ""
-DEFAULT_SUITE_LOGIN_SCHEME = "http"
-DEFAULT_SUITE_LOGIN_HOST = "arthexis.net"
-DEFAULT_SUITE_LOGIN_PORT = 8888
-DEFAULT_SUITE_LOGIN_PATH = "/login/"
-DEFAULT_AUTHORIZED_REDIRECT_DELAY_MS = 3000
 DEFAULT_PREAUTH_ALLOW_ENTRIES: tuple[str, ...] = ()
 AUTHORIZED_MACS_PATH = DEFAULT_STATE_DIR / "authorized_macs.txt"
 TRUSTED_MACS_PATH = DEFAULT_STATE_DIR / "trusted_macs.txt"
 CONSENTS_PATH = DEFAULT_STATE_DIR / "consents.jsonl"
 ACTIVITY_PATH = DEFAULT_STATE_DIR / "activity.jsonl"
-NFT_TABLE_NAME = "arthexis_ap_portal"
+NFT_TABLE_NAME = "gway_ap_portal"
 AUTHORIZED_SET_NAME = "authorized_macs"
 TERMS_VERSION = "qol-recording-v2"
 MAX_PAYLOAD_BYTES = 1024 * 1024
@@ -71,17 +66,14 @@ TERMS_STATEMENT = (
     "for quality of life purposes while using this access point."
 )
 MONITORING_NOTICE = (
-    "Your activities on this AP ARE being monitored. Arthexis records gateway-visible "
+    "Your activities on this AP ARE being monitored. This gateway records "
     "connection metadata, portal requests, device identifiers, consent submissions, "
     "and authorization state for diagnostics, safety, and quality-of-life purposes."
 )
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 MAC_RE = re.compile(r"(?P<mac>([0-9a-f]{2}:){5}[0-9a-f]{2})", re.IGNORECASE)
-LOGGER = logging.getLogger("arthexis.ap_portal")
+LOGGER = logging.getLogger("gway.ap_portal")
 JSONL_APPEND_LOCK = threading.Lock()
-DJANGO_INIT_LOCK = threading.Lock()
-ENV_LOADED = False
-DJANGO_READY = False
 
 
 @dataclass(frozen=True)
@@ -95,12 +87,6 @@ class PortalConfig:
     consents_path: Path
     activity_path: Path
     source_url: str
-    suite_login_scheme: str = DEFAULT_SUITE_LOGIN_SCHEME
-    suite_login_host: str = DEFAULT_SUITE_LOGIN_HOST
-    suite_login_port: int = DEFAULT_SUITE_LOGIN_PORT
-    suite_login_path: str = DEFAULT_SUITE_LOGIN_PATH
-    authorized_redirect_delay_ms: int = DEFAULT_AUTHORIZED_REDIRECT_DELAY_MS
-    registration_email_recipient: str = ""
     preauth_allow_entries: tuple[str, ...] = DEFAULT_PREAUTH_ALLOW_ENTRIES
     sync_firewall: bool = True
     local_development_mac: str | None = None
@@ -158,36 +144,6 @@ def _normalize_preauth_allow_entries(values: list[str]) -> tuple[str, ...]:
     return tuple(entries)
 
 
-def _load_environment() -> None:
-    global ENV_LOADED
-    if ENV_LOADED:
-        return
-    try:
-        from config.loadenv import loadenv
-
-        loadenv()
-    except Exception:
-        LOGGER.warning("Unable to load Arthexis environment files", exc_info=True)
-    ENV_LOADED = True
-
-
-def _ensure_django_ready() -> None:
-    global DJANGO_READY
-    if DJANGO_READY:
-        return
-    with DJANGO_INIT_LOCK:
-        if DJANGO_READY:
-            return
-        _load_environment()
-        os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings")
-        import django
-        from django.apps import apps
-
-        if not apps.ready:
-            django.setup()
-        DJANGO_READY = True
-
-
 def _read_text(path: Path) -> bytes:
     return path.read_bytes()
 
@@ -228,55 +184,6 @@ def _is_loopback_ip(value: str) -> bool:
         return ipaddress.ip_address(value).is_loopback
     except ValueError:
         return value in {"localhost"}
-
-
-def _normalize_url_path(value: str) -> str:
-    path = str(value or DEFAULT_SUITE_LOGIN_PATH).strip() or DEFAULT_SUITE_LOGIN_PATH
-    if not path.startswith("/"):
-        path = f"/{path}"
-    return path
-
-
-def _normalize_url_scheme(value: str) -> str:
-    scheme = (
-        str(value or DEFAULT_SUITE_LOGIN_SCHEME).strip().lower().removesuffix("://")
-    )
-    if scheme not in {"http", "https"}:
-        raise ValueError("--suite-login-scheme must be http or https.")
-    return scheme
-
-
-def _host_for_suite_redirect(host: str, configured_host: str = "") -> str:
-    raw_host = (configured_host or host or "").strip()
-    if not raw_host:
-        return "arthexis.net"
-    if "://" in raw_host or raw_host.startswith("[") or raw_host.count(":") < 2:
-        parsed = urlparse(raw_host if "://" in raw_host else f"//{raw_host}")
-        hostname = parsed.hostname or "arthexis.net"
-    else:
-        hostname = raw_host
-    try:
-        parsed_ip = ipaddress.ip_address(hostname)
-    except ValueError:
-        return hostname
-    if parsed_ip.version == 6:
-        return f"[{hostname}]"
-    return hostname
-
-
-def _suite_login_url(
-    host: str,
-    *,
-    configured_host: str = "",
-    scheme: str,
-    port: int,
-    path: str,
-) -> str:
-    return (
-        f"{_normalize_url_scheme(scheme)}://"
-        f"{_host_for_suite_redirect(host, configured_host)}:{port}"
-        f"{_normalize_url_path(path)}"
-    )
 
 
 def _resolve_preauth_allow_networks(
@@ -332,66 +239,6 @@ def _render_nft_set(
         set_block.append(f"        elements = {{ {', '.join(elements)} }}")
     set_block.append("    }")
     return set_block
-
-
-def _registration_email_recipients(config: PortalConfig) -> list[str]:
-    recipients: list[str] = []
-    for recipient in _split_csv(config.registration_email_recipient):
-        try:
-            recipients.append(_validate_email(recipient))
-        except ValueError:
-            LOGGER.warning(
-                "Ignoring invalid AP registration email recipient %r", recipient
-            )
-    return recipients
-
-
-def _send_registration_email(
-    config: PortalConfig,
-    record: dict[str, Any],
-    already_authorized: bool,
-    trusted_device: bool,
-) -> bool:
-    recipients = _registration_email_recipients(config)
-    if not recipients:
-        return False
-
-    _ensure_django_ready()
-    from django.conf import settings
-    from django.core.mail import EmailMessage, get_connection
-
-    email = str(record.get("email") or "").strip() or "unknown"
-    mac_address = str(record.get("mac_address") or "").strip() or "unknown"
-    subject = f"AP registration: {email}"
-    body = "\n".join(
-        [
-            "An AP registration was accepted.",
-            "",
-            f"Email: {email}",
-            f"MAC address: {mac_address}",
-            f"IP address: {record.get('ip_address') or '-'}",
-            f"Accepted at: {record.get('accepted_at') or '-'}",
-            f"Terms version: {record.get('terms_version') or '-'}",
-            f"Already authorized: {'yes' if already_authorized else 'no'}",
-            f"Trusted device: {'yes' if trusted_device else 'no'}",
-            f"User agent: {record.get('user_agent') or '-'}",
-            f"Source code: {record.get('source_code_url') or '-'}",
-        ]
-    )
-    sender = (
-        getattr(settings, "DEFAULT_FROM_EMAIL", "")
-        or getattr(settings, "DEFAULT_ADMIN_EMAIL", "")
-        or recipients[0]
-    )
-    connection = get_connection(getattr(settings, "EMAIL_BACKEND", None))
-    message = EmailMessage(
-        subject=subject,
-        body=body,
-        from_email=sender,
-        to=recipients,
-        connection=connection,
-    )
-    return bool(message.send(fail_silently=False))
 
 
 class FirewallManager:
@@ -631,18 +478,12 @@ class PortalState:
     def __init__(
         self,
         config: PortalConfig,
-        *,
-        registration_notifier: Callable[
-            [PortalConfig, dict[str, Any], bool, bool], bool
-        ]
-        | None = None,
     ) -> None:
         self.config = config
         self._lock = threading.RLock()
         self._firewall = FirewallManager(
             preauth_allow_entries=config.preauth_allow_entries
         )
-        self._registration_notifier = registration_notifier or _send_registration_email
         self.activity = ActivityRecorder(config)
         self._authorized = _read_authorized_macs(self.config.authorized_macs_path)
         self._trusted = _read_trusted_macs(self.config.trusted_macs_path)
@@ -669,7 +510,6 @@ class PortalState:
         mac_address = self.resolve_mac(ip_address)
         with self._lock:
             authorized, trusted = self._authorization_for_mac(mac_address)
-        authorized_redirect_url = self.suite_login_url(host) if authorized else ""
         self.activity.record(
             "status_check",
             ip_address=ip_address,
@@ -684,8 +524,6 @@ class PortalState:
             "authorized": authorized,
             "trusted_device": trusted,
             "mac_address": mac_address,
-            "authorized_redirect_url": authorized_redirect_url,
-            "redirect_delay_ms": self.config.authorized_redirect_delay_ms,
             "terms_version": TERMS_VERSION,
             "terms_statement": TERMS_STATEMENT,
             "monitoring_notice": MONITORING_NOTICE,
@@ -724,26 +562,6 @@ class PortalState:
             path=path,
             host=host,
             referer=referer,
-        )
-
-    def authorized_redirect_for_request(
-        self, *, ip_address: str | None, host: str, mac_address: str | None = None
-    ) -> str:
-        if mac_address is None:
-            mac_address = self.resolve_mac(ip_address)
-        with self._lock:
-            authorized, _trusted = self._authorization_for_mac(mac_address)
-        if not authorized:
-            return ""
-        return self.suite_login_url(host)
-
-    def suite_login_url(self, host: str) -> str:
-        return _suite_login_url(
-            host,
-            configured_host=self.config.suite_login_host,
-            scheme=self.config.suite_login_scheme,
-            port=self.config.suite_login_port,
-            path=self.config.suite_login_path,
         )
 
     def subscribe(
@@ -850,15 +668,6 @@ class PortalState:
                     self._restore_consent_log(consent_rollback_position)
                     raise
 
-        threading.Thread(
-            target=self._notify_registration_email,
-            args=(record,),
-            kwargs={
-                "already_authorized": already_authorized,
-                "trusted_device": trusted,
-            },
-            daemon=True,
-        ).start()
 
         return {
             "authorized": True,
@@ -867,57 +676,7 @@ class PortalState:
             "mac_address": mac_address,
             "monitoring_notice": MONITORING_NOTICE,
             "source_code_url": self.config.source_url,
-            "redirect_url": self.suite_login_url(host),
-            "redirect_delay_ms": self.config.authorized_redirect_delay_ms,
         }
-
-    def _notify_registration_email(
-        self,
-        record: dict[str, Any],
-        *,
-        already_authorized: bool,
-        trusted_device: bool,
-    ) -> None:
-        if not self.config.registration_email_recipient:
-            return
-        event_fields = {
-            "ip_address": record.get("ip_address"),
-            "mac_address": record.get("mac_address"),
-            "email": record.get("email"),
-            "already_authorized": already_authorized,
-            "trusted_device": trusted_device,
-            "user_agent": record.get("user_agent"),
-        }
-        try:
-            sent = self._registration_notifier(
-                self.config,
-                record,
-                already_authorized,
-                trusted_device,
-            )
-        except Exception as exc:
-            LOGGER.exception("Failed to send AP registration notification")
-            self._record_notification_event(
-                "registration_email_failed",
-                error=str(exc),
-                **event_fields,
-            )
-            return
-
-        if sent:
-            self._record_notification_event("registration_email_sent", **event_fields)
-        else:
-            self._record_notification_event(
-                "registration_email_skipped",
-                error="no recipients or backend reported no sent messages",
-                **event_fields,
-            )
-
-    def _record_notification_event(self, event_type: str, **fields: Any) -> None:
-        try:
-            self.activity.record(event_type, **fields)
-        except OSError:
-            LOGGER.warning("Unable to record AP registration email event", exc_info=True)
 
     def resolve_mac(self, ip_address: str | None) -> str | None:
         if not ip_address:
@@ -996,7 +755,7 @@ class PortalApplication:
         app = self
 
         class Handler(BaseHTTPRequestHandler):
-            server_version = "ArthexisAPPortal/2.0"
+            server_version = "GWAYAPPortal/2.0"
 
             def log_message(self, format: str, *args: Any) -> None:
                 LOGGER.info("%s - %s", self.address_string(), format % args)
@@ -1028,8 +787,6 @@ class PortalApplication:
                     return
 
                 if request_path in {"", "/"}:
-                    if self._redirect_authorized_request(request_path):
-                        return
                     self._serve_portal_page(request_path or "/")
                     return
                 if request_path.startswith("/api/"):
@@ -1037,8 +794,6 @@ class PortalApplication:
                     self.send_error(HTTPStatus.NOT_FOUND)
                     return
                 if request_path in CAPTIVE_PORTAL_PROBE_PATHS:
-                    if self._redirect_authorized_request(request_path):
-                        return
                     self._serve_portal_page(request_path)
                     return
                 asset_name = request_path.lstrip("/")
@@ -1050,8 +805,6 @@ class PortalApplication:
                         self._record_request(request_path)
                         if not self._serve_asset(asset_name):
                             self.send_error(HTTPStatus.NOT_FOUND)
-                        return
-                    if self._redirect_authorized_request(request_path):
                         return
                     self._serve_portal_page(request_path)
                     return
@@ -1130,27 +883,6 @@ class PortalApplication:
                     mac_address=mac_address,
                 )
 
-            def _redirect_authorized_request(self, path: str) -> bool:
-                ip_address = self._client_ip()
-                mac_address = app.state.resolve_mac(ip_address)
-                redirect_url = app.state.authorized_redirect_for_request(
-                    ip_address=ip_address,
-                    host=self.headers.get("Host", ""),
-                    mac_address=mac_address,
-                )
-                if not redirect_url:
-                    return False
-                self._record_request(
-                    path,
-                    ip_address=ip_address,
-                    mac_address=mac_address,
-                )
-                self.send_response(HTTPStatus.FOUND)
-                self.send_header("Location", redirect_url)
-                self.send_header("Cache-Control", "no-store")
-                self.end_headers()
-                return True
-
             def _serve_portal_page(self, path: str) -> None:
                 self._record_request(path)
                 if not self._serve_asset("index.html"):
@@ -1205,7 +937,6 @@ class PortalApplication:
 
 
 def build_config(args: argparse.Namespace) -> PortalConfig:
-    _load_environment()
     state_dir = Path(args.state_dir).expanduser().resolve()
     assets_dir = Path(args.assets_dir).expanduser().resolve()
     trusted_macs_path = (
@@ -1215,12 +946,12 @@ def build_config(args: argparse.Namespace) -> PortalConfig:
     )
     source_url = (
         args.source_url
-        or os.environ.get("ARTHEXIS_AP_SOURCE_URL")
+        or os.environ.get("GWAY_AP_SOURCE_URL")
         or DEFAULT_SOURCE_URL
     )
     local_development_mac = (
         args.local_development_mac
-        or os.environ.get("ARTHEXIS_AP_LOCAL_DEVELOPMENT_MAC")
+        or os.environ.get("GWAY_AP_LOCAL_DEVELOPMENT_MAC")
         or (LOCAL_DEVELOPMENT_MAC if args.skip_firewall_sync else "")
     )
     if local_development_mac:
@@ -1231,14 +962,9 @@ def build_config(args: argparse.Namespace) -> PortalConfig:
     if not args.disable_default_preauth_allow_hosts:
         preauth_entries.extend(DEFAULT_PREAUTH_ALLOW_ENTRIES)
     preauth_entries.extend(
-        _split_csv(os.environ.get("ARTHEXIS_AP_PREAUTH_ALLOW_HOSTS", ""))
+        _split_csv(os.environ.get("GWAY_AP_PREAUTH_ALLOW_HOSTS", ""))
     )
     preauth_entries.extend(args.preauth_allow_host or [])
-    registration_email_recipient = (
-        args.registration_email_recipient
-        or os.environ.get("ARTHEXIS_AP_REGISTRATION_EMAIL_RECIPIENT", "")
-        or os.environ.get("DEFAULT_ADMIN_EMAIL", "")
-    ).strip()
     return PortalConfig(
         bind=args.bind,
         port=args.port,
@@ -1249,12 +975,6 @@ def build_config(args: argparse.Namespace) -> PortalConfig:
         consents_path=state_dir / "consents.jsonl",
         activity_path=state_dir / "activity.jsonl",
         source_url=source_url,
-        suite_login_scheme=_normalize_url_scheme(args.suite_login_scheme),
-        suite_login_host=args.suite_login_host,
-        suite_login_port=args.suite_login_port,
-        suite_login_path=_normalize_url_path(args.suite_login_path),
-        authorized_redirect_delay_ms=args.authorized_redirect_delay_ms,
-        registration_email_recipient=registration_email_recipient,
         preauth_allow_entries=_normalize_preauth_allow_entries(preauth_entries),
         sync_firewall=not args.skip_firewall_sync,
         local_development_mac=local_development_mac or None,
@@ -1263,7 +983,7 @@ def build_config(args: argparse.Namespace) -> PortalConfig:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run the Arthexis AP consent and monitoring portal."
+        description="Run the GWAY AP consent and monitoring portal."
     )
     parser.add_argument("--bind", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=9080)
@@ -1271,25 +991,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--state-dir", default=str(DEFAULT_STATE_DIR))
     parser.add_argument("--trusted-macs-path", default="")
     parser.add_argument("--source-url", default="")
-    parser.add_argument("--suite-login-scheme", default=DEFAULT_SUITE_LOGIN_SCHEME)
-    parser.add_argument("--suite-login-host", default=DEFAULT_SUITE_LOGIN_HOST)
-    parser.add_argument(
-        "--suite-login-port", type=int, default=DEFAULT_SUITE_LOGIN_PORT
-    )
-    parser.add_argument("--suite-login-path", default=DEFAULT_SUITE_LOGIN_PATH)
-    parser.add_argument(
-        "--authorized-redirect-delay-ms",
-        type=int,
-        default=DEFAULT_AUTHORIZED_REDIRECT_DELAY_MS,
-    )
-    parser.add_argument(
-        "--registration-email-recipient",
-        default="",
-        help=(
-            "Email address to notify after a successful AP registration. Defaults "
-            "to ARTHEXIS_AP_REGISTRATION_EMAIL_RECIPIENT or DEFAULT_ADMIN_EMAIL."
-        ),
-    )
     parser.add_argument(
         "--preauth-allow-host",
         action="append",
@@ -1297,7 +998,7 @@ def parse_args() -> argparse.Namespace:
         help=(
             "Hostname, IP address, or CIDR network reachable before AP registration. "
             "Can be repeated. No hosts are allowed by default; "
-            "ARTHEXIS_AP_PREAUTH_ALLOW_HOSTS adds comma-separated entries."
+            "GWAY_AP_PREAUTH_ALLOW_HOSTS adds comma-separated entries."
         ),
     )
     parser.add_argument(

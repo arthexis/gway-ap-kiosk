@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ENV_FILE="${KIOSK_ENV_FILE:-/etc/default/arthexis-hdmi-kiosk}"
+ENV_FILE="${KIOSK_ENV_FILE:-/etc/default/gway-hdmi-kiosk}"
 if [[ -r "${ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
@@ -9,7 +9,7 @@ fi
 
 : "${KIOSK_URL:=http://127.0.0.1:8888/}"
 : "${KIOSK_BROWSER:=/usr/bin/chromium}"
-: "${KIOSK_APP_ID:=arthexis-hdmi-kiosk}"
+: "${KIOSK_APP_ID:=gway-hdmi-kiosk}"
 : "${KIOSK_TARGET_OUTPUT:=HDMI-A-2}"
 : "${KIOSK_REQUIRE_TARGET_OUTPUT:=0}"
 : "${KIOSK_WINDOW_SIZE:=1920,1080}"
@@ -31,10 +31,8 @@ fi
 : "${KIOSK_WHATSAPP_CACHE_DIR:=/home/arthe/.cache/whatsapp-kiosk-panel}"
 : "${KIOSK_WHATSAPP_EXTRA_CHROMIUM_FLAGS:=}"
 : "${KIOSK_WHATSAPP_LEFT_CROP_PIXELS:=0}"
-: "${KIOSK_RFID_AUTO_DISPLAY:=0}"
-: "${KIOSK_RFID_AUTO_DISPLAY_TOKEN_FILE:=/var/lib/arthexis-hdmi-kiosk/rfid-auto-display.token}"
 : "${KIOSK_BASTION_CHECK:=/usr/local/libexec/bastion-key-present}"
-: "${KIOSK_MANUAL_STATE_FILE:=/run/user/1000/arthexis-hdmi-kiosk/manual-enabled}"
+: "${KIOSK_MANUAL_STATE_FILE:=/run/user/1000/gway-hdmi-kiosk/manual-enabled}"
 : "${KIOSK_RESTART_ON_KEY_ABSENT:=1}"
 : "${KIOSK_HIDE_WF_PANEL:=0}"
 : "${KIOSK_WF_PANEL_RESPAWN_PATTERN:=/usr/bin/lwrespawn /usr/bin/wf-panel-pi}"
@@ -166,45 +164,20 @@ if truthy "${KIOSK_SUSPEND}"; then
 fi
 
 normalize_kiosk_url() {
-  local token=""
-  if [[ -r "${KIOSK_RFID_AUTO_DISPLAY_TOKEN_FILE}" ]]; then
-    token="$(tr -d '\r\n' < "${KIOSK_RFID_AUTO_DISPLAY_TOKEN_FILE}")"
-  fi
-  /usr/bin/python3 - "${KIOSK_URL}" "${KIOSK_RFID_AUTO_DISPLAY}" "${token}" <<'PY'
+  /usr/bin/python3 - "${KIOSK_URL}" <<'PY'
 import sys
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-url = sys.argv[1]
-auto_display = sys.argv[2].strip().lower() in {"1", "true", "yes", "on"}
-token = sys.argv[3].strip()
-parts = urlsplit(url)
-query_pairs = [
-    (key, value)
-    for key, value in parse_qsl(parts.query, keep_blank_values=True)
-    if key not in {"kiosk", "rfid_auto_display", "kiosk_rfid_auto_display_token"}
-]
+parts = urlsplit(sys.argv[1])
+query_pairs = [(key, value) for key, value in parse_qsl(parts.query, keep_blank_values=True) if key != "kiosk"]
 query_pairs.append(("kiosk", "1"))
-if auto_display:
-    query_pairs.append(("rfid_auto_display", "1"))
-    if token:
-        query_pairs.append(("kiosk_rfid_auto_display_token", token))
-print(
-    urlunsplit(
-        (
-            parts.scheme,
-            parts.netloc,
-            parts.path or "/",
-            urlencode(query_pairs, doseq=True),
-            parts.fragment,
-        )
-    )
-)
+print(urlunsplit((parts.scheme, parts.netloc, parts.path or "/", urlencode(query_pairs), parts.fragment)))
 PY
 }
 
 KIOSK_URL="$(normalize_kiosk_url)"
 
-export HOME=/var/lib/arthexis-hdmi-kiosk
+export HOME=/var/lib/gway-hdmi-kiosk
 export XDG_CONFIG_HOME="${HOME}/.config"
 export XDG_CACHE_HOME="${HOME}/.cache"
 export XDG_DATA_HOME="${HOME}/.local/share"
@@ -339,8 +312,8 @@ restack_hdmi_windows() {
 
   for attempt in {1..60}; do
     window_list="$("${KIOSK_WMCTRL}" -lx -G 2>/dev/null || true)"
-    status_id="$(awk '$0 ~ /arthexis-hdmi-kiosk/ && $0 !~ /arthexis-hdmi-kiosk-whatsapp/ { print $1; exit }' <<< "${window_list}")"
-    whatsapp_id="$(awk '$0 ~ /arthexis-hdmi-kiosk-whatsapp/ { print $1; exit }' <<< "${window_list}")"
+    status_id="$(awk '$0 ~ /gway-hdmi-kiosk/ && $0 !~ /gway-hdmi-kiosk-whatsapp/ { print $1; exit }' <<< "${window_list}")"
+    whatsapp_id="$(awk '$0 ~ /gway-hdmi-kiosk-whatsapp/ { print $1; exit }' <<< "${window_list}")"
 
     if [[ -n "${status_id}" && -n "${whatsapp_id}" ]]; then
       "${KIOSK_WMCTRL}" -i -r "${whatsapp_id}" -b remove,above >/dev/null 2>&1 || true
@@ -367,7 +340,7 @@ force_single_hdmi_window() {
 
   for attempt in {1..60}; do
     window_list="$("${KIOSK_WMCTRL}" -lx -G 2>/dev/null || true)"
-    status_id="$(awk '$0 ~ /arthexis-hdmi-kiosk/ && $0 !~ /arthexis-hdmi-kiosk-whatsapp/ { print $1; exit }' <<< "${window_list}")"
+    status_id="$(awk '$0 ~ /gway-hdmi-kiosk/ && $0 !~ /gway-hdmi-kiosk-whatsapp/ { print $1; exit }' <<< "${window_list}")"
 
     if [[ -n "${status_id}" ]]; then
       if [[ -x "${KIOSK_XPROP}" ]]; then

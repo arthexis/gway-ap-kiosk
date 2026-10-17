@@ -1,64 +1,24 @@
-# gway-kiosk
+# GWAY HDMI Kiosk
 
-Host-local kiosk runtime for GWAY-001.
+The HDMI kiosk is a standalone local interface for kiosk and Wi-Fi AP status. It does not start or proxy Arthexis, OCPP, RFID, LCD, or VNC services.
 
-This repository snapshots the kiosk work installed on this host:
+## Runtime
 
-- `bin/gway-kiosk-status`: local status web server on `127.0.0.1:8899`.
-- `bin/kiosk-mode`: operator toggle for HDMI kiosk mode while the bastion key is verified.
-- `bin/arthexis-kiosk-login-session`: binds locked-down Arthexis kiosk sessions to Chromium profiles.
-- `sbin/arthexis-hdmi-kiosk-session`: HDMI Chromium kiosk session.
-- `sbin/arthexis-hdmi-kiosk-layout`: bastion-key-aware HDMI layout controller.
-- `sbin/arthexis-vnc-kiosk-session`: VNC kiosk browser session.
-- `systemd/`: deployed units and drop-ins.
-- `defaults/*.example`: non-secret host config templates.
-- `config/arthexis-kiosk/openbox-rc.xml`: VNC Openbox policy.
-- `config/arthexis-kiosk/vnc.conf.example`: VNC server template without the password.
-- `config/labwc/window-rules.xml`: labwc kiosk window-rule snippet.
-- `desktop/` and `applications/`: local launchers for `kiosk-mode`.
+- `bin/gway-kiosk-status`: loopback HTTP status server at `127.0.0.1:8899`; AP credentials are excluded from its responses.
+- `bin/kiosk-mode`: local HDMI kiosk control with bastion-key safety checks.
+- `sbin/gway-hdmi-kiosk-session` and `sbin/gway-hdmi-kiosk-layout`: legacy-named local HDMI entrypoints.
 
-The deployed status page currently refreshes every 30 seconds and includes local TODO status. The email watcher is intentionally outside this repository except where `gway-kiosk-status` reports its timer state.
+The `arthexis-` prefix on the retained HDMI executable and systemd names is historical naming only. These units must not depend on or start an Arthexis application service. Renaming them requires coordinated updates to systemd, desktop entries and deployment, and is separate from removing application dependencies.
 
-## Install
+## Installation
 
-Review `defaults/*.example` and install host-local secrets separately before using a fresh node. The repository does not include the VNC password or RFID auto-display token.
+Use `../deploy.sh` with its Ansible playbook. The former `tools/install.sh` and Prodigy password helpers have been removed. This branch does not modify running appliances or provide migration and uninstall scripts.
 
-```bash
-./tools/install.sh
-```
+## Verification
 
-By default, `tools/install.sh` installs scripts, man pages, systemd units, launchers, and non-secret application config. It does not replace existing files under `/etc/default` or `/etc/arthexis-kiosk/vnc.conf`.
-
-To seed missing example configs:
-
-```bash
-./tools/install.sh --install-config
-```
-
-To replace existing example-backed configs, use:
-
-```bash
-./tools/install.sh --install-config --overwrite-config
-```
-
-After installation, the helper runs `systemctl daemon-reload`. It does not restart the kiosk services automatically.
-
-## Verify
-
-```bash
+```sh
+python3 -m pytest -q tests
 ./tools/verify.sh
 ```
 
-The verifier compiles Python and shell files, runs `gway-kiosk-status --self-test`, renders man pages with warnings enabled when `man` is available, validates the desktop launcher when `desktop-file-validate` is available, and checks systemd unit syntax through a temporary tree.
-
-Live checks on this host:
-
-```bash
-systemctl is-active gway-kiosk-status.service arthexis-hdmi-kiosk.service arthexis-vnc-kiosk.service
-python3 - <<'PY'
-import json
-from urllib.request import urlopen
-payload = json.load(urlopen("http://127.0.0.1:8899/kiosk/status/data/", timeout=5))
-print(payload["refresh_seconds"])
-PY
-```
+The local status data endpoint is `http://127.0.0.1:8899/kiosk/status/data/`.

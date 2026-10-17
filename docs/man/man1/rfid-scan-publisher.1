@@ -7,18 +7,40 @@ rfid-scan-publisher \- standalone local RFID scan producer
 .SH DESCRIPTION
 .B rfid-scan-publisher
 owns the local RC522 reader and publishes scans without importing the Arthexis
-runtime. It writes latest-scan JSON, scan logs, status JSON, LCD events, and
-optional card-list entries for local consumers.
+runtime. It writes latest-scan JSON, scan logs, status JSON, LCD events, a
+durable command queue, and optional card-list entries for local consumers.
+.PP
+The initial scan beep and LCD event acknowledge a detected card. Removing a
+card before the deep-read hold time queues it. Holding it for six seconds by
+default runs a deep read only when its local mapping declares
+.B RFID_MODE_QUEUE_DEEP_DATA=1
+and queues it when that read finishes, including when no deep data is
+available. The RFID LCD event is released when the item is
+queued. During deep read, the configured progress sound is emitted once per
+second while the card identity and command label remain displayed.
 .SH OPTIONS
 .TP
 .BI --scan-file " FILE"
 Path for latest scan JSON.
+.TP
+.BI --queue-dir " DIR"
+Directory containing durable pending, processing, interrupt, control, done,
+failed, cleared, and interrupted command records.
 .TP
 .BI --log-file " FILE"
 Path for append-only scan log.
 .TP
 .BI --status-file " FILE"
 Path for publisher status JSON.
+.TP
+.BI --deep-hold-seconds " SECONDS"
+Seconds a card must remain present before the automatic deep read. Default: 6.
+.PP
+A mapping with
+.B RFID_MODE_QUEUE_INTERRUPT=1
+is committed to the interrupt lane. A mapping with
+.B RFID_MODE_QUEUE_DEEP_DATA=1
+uses the deep-read trigger; other cards queue on removal.
 .TP
 .BI --cards-file " FILE"
 Optional plain card list to append newly scanned UIDs to.
@@ -38,6 +60,7 @@ Wait for one scan, publish it, and exit.
 .nf
 systemctl status rfid-scan-publisher.service --no-pager
 cat /home/arthe/.local/state/rfid-mode/rfid-scan-publisher.json
+find /home/arthe/.local/state/rfid-mode/queue -type f
 /home/arthe/.local/share/rfid-mode/.venv/bin/python /home/arthe/.local/bin/rfid-scan-publisher --once --once-timeout 5
 .fi
 .SH SEE ALSO

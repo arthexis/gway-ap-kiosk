@@ -6,21 +6,33 @@ rfid-mode-runner \- run local modes selected by RFID card paths
 .RI [ options ]
 .SH DESCRIPTION
 .B rfid-mode-runner
-watches the RFID scan JSON file and interprets
+watches the durable RFID command queue and interprets
 .I /home/arthe/.config/rfid-modes/cards
-as a state machine. It starts, stops, and supervises command scripts created by
+as a state machine. It atomically claims the oldest queued event and does not
+start another card command while one is active. It starts, stops, and supervises command scripts created by
 .BR rfid-register (1).
+.PP
+When a top-level card has both a directory and a sidecar command script, the
+runner treats the sidecar as a one-shot action by default and keeps navigation
+at the root. Add
+.B RFID_MODE_STATEFUL=1
+to the sidecar only when the card is intentionally a long-lived mode or selector
+that should enter its own directory.
 .SH OPTIONS
 .TP
 .BI --scan-file " FILE"
-Read scans from
+Use the latest scan snapshot at
 .IR FILE .
+.TP
+.BI --queue-dir " DIR"
+Consume queued card events from
+.IR DIR .
 .TP
 .BI --config-dir " DIR"
 Use a non-default RFID mode config directory.
 .TP
 .B --once
-Process the current scan once and exit.
+Process one queued event once and exit.
 .TP
 .B --dry-run
 Log actions without starting or stopping scripts.
@@ -30,6 +42,21 @@ Print the current runner state JSON.
 .TP
 .B --stop-current
 Stop the currently running mode process.
+.TP
+.B --request-queue-clear
+Request that the worker clears pending cards on its next queue pass.
+.TP
+.BI --reason " TEXT"
+Record TEXT with a queue-clear request.
+.SH QUEUE POLICIES
+Mapping sidecars may declare
+.B RFID_MODE_QUEUE_INTERRUPT=1
+to run through the interrupt lane, preempt active work, and clear pending
+commands. Use
+.B RFID_MODE_QUEUE_DEEP_DATA=1
+only when a command needs the optional deep-read context. A mapping declaring
+.B RFID_MODE_QUEUE_CONSUME_NEXT_SECONDS=N
+may intentionally consume the next queued card during its N-second window.
 .SH SCRIPT ENVIRONMENT
 Started scripts receive variables such as
 .BR RFID_MODE_CARD_ID ,
@@ -40,11 +67,22 @@ Started scripts receive variables such as
 .BR RFID_MODE_HOLD ,
 and
 .BR RFID_MODE_NEW .
+.PP
+A transition script declaring
+.B RFID_MODE_PREEMPT_ACTION=1
+is first invoked with
+.B RFID_MODE_PREEMPT_ONLY=1
+before the runner stops a currently tracked mode. Exit status 0 consumes the
+scan as a secondary action; exit status 75 continues to the script's normal
+primary transition. Any other exit status safely consumes the scan without
+switching the current mode.
 .SH EXAMPLES
 .nf
 /home/arthe/.local/bin/rfid-mode-runner --status
 /home/arthe/.local/bin/rfid-mode-runner --once --dry-run
 /home/arthe/.local/bin/rfid-mode-runner --stop-current
+/home/arthe/.local/bin/rfid-mode-runner --request-queue-clear --reason operator
+/home/arthe/.local/bin/rfid-queue-status
 systemctl --user status rfid-mode-runner.service --no-pager
 .fi
 .SH SEE ALSO

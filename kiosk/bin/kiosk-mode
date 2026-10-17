@@ -2,9 +2,9 @@
 set -Eeuo pipefail
 
 BASTION_CHECK="${KIOSK_BASTION_CHECK:-/usr/local/libexec/bastion-key-present}"
-MANUAL_STATE_FILE="${KIOSK_MANUAL_STATE_FILE:-/run/user/1000/arthexis-hdmi-kiosk/manual-enabled}"
-LAYOUT_SERVICE="${KIOSK_LAYOUT_SERVICE:-arthexis-hdmi-kiosk-layout.service}"
-KIOSK_SERVICE="${KIOSK_SERVICE:-arthexis-hdmi-kiosk.service}"
+MANUAL_STATE_FILE="${KIOSK_MANUAL_STATE_FILE:-/run/user/1000/gway-hdmi-kiosk/manual-enabled}"
+LAYOUT_SERVICE="${KIOSK_LAYOUT_SERVICE:-gway-hdmi-kiosk-layout.service}"
+KIOSK_SERVICE="${KIOSK_SERVICE:-gway-hdmi-kiosk.service}"
 
 notify() {
   local message="$1"
@@ -30,11 +30,8 @@ write_manual_state() {
   state_dir="$(dirname "${MANUAL_STATE_FILE}")"
   mkdir -p "${state_dir}"
   chmod 0700 "${state_dir}"
-  tmp_file="${MANUAL_STATE_FILE}.$$"
-  {
-    printf 'enabled_at=%s\n' "$(date --iso-8601=seconds)"
-    printf 'enabled_by=%s\n' "$(id -un)"
-  } > "${tmp_file}"
+  tmp_file="${MANUAL_STATE_FILE}.$"
+  printf 'enabled_at=%s\nenabled_by=%s\n' "$(date --iso-8601=seconds)" "$(id -un)" > "${tmp_file}"
   chmod 0600 "${tmp_file}"
   mv -f "${tmp_file}" "${MANUAL_STATE_FILE}"
 }
@@ -87,9 +84,10 @@ usage() {
   cat <<'EOF'
 Usage: kiosk-mode [on|off|status]
 
-Enable or disable the host-local Arthexis HDMI kiosk when the bastion USB key
+Enable or disable the host-local GWAY HDMI kiosk when the bastion USB key
 is verified. Disabling is refused while the key is absent so kiosk mode remains
 mandatory.
+
 EOF
 }
 

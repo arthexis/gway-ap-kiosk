@@ -3,15 +3,6 @@ const statusEl = document.querySelector("#status");
 const sourceRow = document.querySelector("#source-row");
 const sourceLink = document.querySelector("#source-link");
 
-function redirectAfterDelay(url, delayMs) {
-  if (!url) {
-    return;
-  }
-  window.setTimeout(() => {
-    window.location.href = url;
-  }, delayMs ?? 3000);
-}
-
 async function loadStatus() {
   const response = await fetch("/api/status", { cache: "no-store" });
   if (!response.ok) {
@@ -25,9 +16,8 @@ async function loadStatus() {
     sourceRow.hidden = true;
   }
   if (payload.authorized) {
-    statusEl.textContent = "This device is already authorized. Opening Arthexis.";
+    statusEl.textContent = "This device is already authorized for AP access.";
     form.hidden = true;
-    redirectAfterDelay(payload.authorized_redirect_url, payload.redirect_delay_ms);
   }
 }
 
@@ -51,8 +41,8 @@ form.addEventListener("submit", async (event) => {
     if (!response.ok) {
       throw new Error(result.error || "Unable to authorize this device.");
     }
-    statusEl.textContent = "Access recorded. Opening Arthexis.";
-    redirectAfterDelay(result.redirect_url || "/", result.redirect_delay_ms);
+    statusEl.textContent = "Access granted for this device.";
+    form.hidden = true;
   } catch (error) {
     statusEl.textContent = error.message;
     button.disabled = false;

@@ -1,6 +1,6 @@
 KIOSK_URL='http://127.0.0.1:8899/kiosk/status/'
 KIOSK_BROWSER=/usr/bin/chromium
-KIOSK_APP_ID=arthexis-hdmi-kiosk
+KIOSK_APP_ID=gway-hdmi-kiosk
 KIOSK_TARGET_OUTPUT=HDMI-A-2
 KIOSK_REQUIRE_TARGET_OUTPUT=0
 KIOSK_WINDOW_SIZE=auto
@@ -22,9 +22,6 @@ KIOSK_WHATSAPP_CACHE_DIR='/home/arthe/.cache/whatsapp-kiosk-panel'
 KIOSK_WHATSAPP_EXTRA_CHROMIUM_FLAGS=
 KIOSK_WHATSAPP_LEFT_CROP_PIXELS=0
 KIOSK_SUSPEND=0
-KIOSK_RFID_AUTO_DISPLAY=1
-KIOSK_RFID_AUTO_DISPLAY_TOKEN_FILE=/var/lib/arthexis-hdmi-kiosk/rfid-auto-display.token
 KIOSK_BASTION_CHECK=/usr/local/libexec/bastion-key-present
-KIOSK_MANUAL_STATE_FILE=/run/user/1000/arthexis-hdmi-kiosk/manual-enabled
+KIOSK_MANUAL_STATE_FILE=/run/user/1000/gway-hdmi-kiosk/manual-enabled
 KIOSK_HIDE_WF_PANEL=1
-

@@ -1,0 +1,94 @@
+---
+- name: Install standalone AP kiosk on a fresh appliance
+  hosts: localhost
+  connection: local
+  gather_facts: true
+  vars:
+    kiosk_user: arthe
+    kiosk_home: /home/arthe
+    project_root: "{{ playbook_dir }}/../.."
+  tasks:
+    - name: Require existing kiosk operator account
+      ansible.builtin.getent:
+        database: passwd
+        key: "{{ kiosk_user }}"
+
+    - name: Install kiosk and AP runtime executables
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/{{ item.src }}"
+        dest: "{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "0755"
+      loop:
+        - { src: kiosk/bin/gway-kiosk-status, dest: /home/arthe/.local/bin/gway-kiosk-status }
+        - { src: kiosk/bin/kiosk-mode, dest: /home/arthe/.local/bin/kiosk-mode }
+        - { src: kiosk/sbin/gway-hdmi-kiosk-session, dest: /usr/local/sbin/gway-hdmi-kiosk-session }
+        - { src: kiosk/sbin/gway-hdmi-kiosk-layout, dest: /usr/local/sbin/gway-hdmi-kiosk-layout }
+        - { src: kiosk/libexec/gway-boot-stagger-until, dest: /usr/local/libexec/gway-boot-stagger-until }
+        - { src: scripts/ap/kiosk-ap, dest: /usr/local/sbin/kiosk-ap }
+
+    - name: Install restricted AP rotation sudoers policy
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/gway-kiosk-ap
+        owner: root
+        group: root
+        mode: "0440"
+        content: |
+          {{ kiosk_user }} ALL=(root) NOPASSWD: /usr/local/sbin/kiosk-ap rotate
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Install kiosk systemd services
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/kiosk/systemd/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - gway-kiosk-status.service
+        - gway-hdmi-kiosk.service
+        - gway-hdmi-kiosk-layout.service
+      notify: Reload systemd
+
+    - name: Install default kiosk configuration only on fresh installation
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/kiosk/defaults/{{ item.src }}"
+        dest: "/etc/default/{{ item.dest }}"
+        owner: root
+        group: root
+        mode: "0644"
+        force: false
+      loop:
+        - { src: gway-hdmi-kiosk.example, dest: gway-hdmi-kiosk }
+        - { src: gway-hdmi-kiosk-layout.example, dest: gway-hdmi-kiosk-layout }
+
+    - name: Reload service manager before enabling kiosk status
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start standalone kiosk status
+      become: true
+      ansible.builtin.systemd_service:
+        name: gway-kiosk-status.service
+        enabled: true
+        state: started
+
+    - name: Check standalone kiosk HTTP response
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8899/kiosk/status/data/
+        return_content: false
+        status_code: 200
+      register: kiosk_health
+      retries: 5
+      delay: 2
+      until: kiosk_health.status == 200
+
+  handlers:
+    - name: Reload systemd
+      become: true
+      ansible.builtin.systemd_service:
+        daemon_reload: true

@@ -11,11 +11,11 @@ from pathlib import Path
 
 
 DEFAULTS = {
-    "KIOSK_LAYOUT_CONFIG_FILE": "/etc/default/arthexis-hdmi-kiosk-layout",
-    "KIOSK_LAYOUT_ENV_FILE": "/etc/default/arthexis-hdmi-kiosk",
+    "KIOSK_LAYOUT_CONFIG_FILE": "/etc/default/gway-hdmi-kiosk-layout",
+    "KIOSK_LAYOUT_ENV_FILE": "/etc/default/gway-hdmi-kiosk",
     "KIOSK_LAYOUT_LABWC_RC": "/home/arthe/.config/labwc/rc.xml",
     "KIOSK_LAYOUT_LABWC_USER": "arthe",
-    "KIOSK_LAYOUT_SERVICE": "arthexis-hdmi-kiosk.service",
+    "KIOSK_LAYOUT_SERVICE": "gway-hdmi-kiosk.service",
     "KIOSK_LAYOUT_KEY_UUID": "82EB-36B8",
     "KIOSK_LAYOUT_BASTION_CHECK": "/usr/local/libexec/bastion-key-present",
     "KIOSK_LAYOUT_DEFAULT_OUTPUT": "HDMI-A-2",
@@ -24,7 +24,7 @@ DEFAULTS = {
     "KIOSK_LAYOUT_RELOAD_LABWC_ON_CHANGE": "1",
     "KIOSK_LAYOUT_SUSPEND_ON_KEY_PRESENT": "1",
     "KIOSK_LAYOUT_RESUME_ON_KEY_ABSENT": "1",
-    "KIOSK_LAYOUT_MANUAL_STATE_FILE": "/run/user/1000/arthexis-hdmi-kiosk/manual-enabled",
+    "KIOSK_LAYOUT_MANUAL_STATE_FILE": "/run/user/1000/gway-hdmi-kiosk/manual-enabled",
 }
 
 
@@ -267,7 +267,7 @@ def main():
     if args.force_present and args.force_absent:
         parser.error("--force-present and --force-absent are mutually exclusive")
 
-    lock_path = Path("/run/arthexis-hdmi-kiosk-layout.lock")
+    lock_path = Path("/run/gway-hdmi-kiosk-layout.lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("w") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
@@ -275,7 +275,7 @@ def main():
         settings = dict(DEFAULTS)
         settings.update(load_env_file(settings["KIOSK_LAYOUT_CONFIG_FILE"]))
         kiosk_env = load_env_file(settings["KIOSK_LAYOUT_ENV_FILE"])
-        app_id = kiosk_env.get("KIOSK_APP_ID", "arthexis-hdmi-kiosk")
+        app_id = kiosk_env.get("KIOSK_APP_ID", "gway-hdmi-kiosk")
 
         if args.force_present:
             present = True

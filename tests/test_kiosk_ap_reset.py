@@ -58,13 +58,13 @@ class KioskApResetTests(unittest.TestCase):
         self.assertEqual((status, body), (403, {"ok": False}))
         command.assert_not_called()
 
-    def test_rotate_target_and_display_are_explicit(self):
+    def test_rotate_target_is_explicit(self):
         with patch.object(Path, "is_file", return_value=True), \
              patch.object(kiosk.os, "access", return_value=True), \
              patch.object(kiosk.subprocess, "run") as run:
             run.return_value.returncode = 0
             self.assertTrue(kiosk.reset_access_point())
-        self.assertEqual(run.call_args.args[0], [str(kiosk.AP_ROTATE_COMMAND), "--display"])
+        self.assertEqual(run.call_args.args[0], ["sudo", "-n", str(kiosk.AP_ROTATE_COMMAND), "rotate"])
         self.assertTrue(run.call_args.kwargs["capture_output"])
 
 
