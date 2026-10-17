@@ -4,6 +4,7 @@
   connection: local
   gather_facts: true
   vars:
+    kiosk_ci_mode: false
     kiosk_user: arthe
     kiosk_home: /home/arthe
     project_root: "{{ playbook_dir }}/../.."
@@ -102,9 +103,11 @@
         - { src: gway-hdmi-kiosk-layout.example, dest: gway-hdmi-kiosk-layout }
 
     - name: Reload service manager before enabling kiosk status
+      when: not kiosk_ci_mode | bool
       ansible.builtin.meta: flush_handlers
 
     - name: Enable and start standalone kiosk status
+      when: not kiosk_ci_mode | bool
       become: true
       ansible.builtin.systemd_service:
         name: gway-kiosk-status.service
@@ -112,6 +115,7 @@
         state: started
 
     - name: Check standalone kiosk HTTP response
+      when: not kiosk_ci_mode | bool
       ansible.builtin.uri:
         url: http://127.0.0.1:8899/kiosk/status/data/
         return_content: false
@@ -123,6 +127,7 @@
 
   handlers:
     - name: Reload systemd
+      when: not kiosk_ci_mode | bool
       become: true
       ansible.builtin.systemd_service:
         daemon_reload: true
