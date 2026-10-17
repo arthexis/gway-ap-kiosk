@@ -21,5 +21,22 @@ jobs:
         run: python -m pip install pytest ansible-core
       - name: Run AP and kiosk regression tests
         run: python -m pytest -q --durations=0 --durations-min=0.001 tests/test_kiosk_ap_reset.py tests/test_kiosk_independence.py tests/test_kiosk_ap_discovery.py tests/test_ap_portal_server.py tests/test_kiosk_ap_security.py tests/test_ansible_install_contract.py
-      - name: Ansible syntax\n        run: ansible-playbook --syntax-check -i localhost, ansible/playbooks/install.yml\n      - name: Shell syntax
+      - name: Ansible syntax
+        run: ansible-playbook --syntax-check -i localhost, ansible/playbooks/install.yml
+      - name: Shell syntax
         run: bash -n deploy.sh
+      - name: Prepare clean appliance operator
+        run: |
+          if ! id arthe >/dev/null 2>&1; then
+            sudo useradd --create-home --shell /bin/bash arthe
+          fi
+      - name: Application deploy (fresh install, fail forward)
+        run: sudo ./deploy.sh --extra-vars kiosk_ci_mode=true -v
+      - name: Verify installed application files
+        run: |
+          test -x /usr/local/sbin/kiosk-ap
+          test -x /usr/local/sbin/gway-hdmi-kiosk-session
+          test -x /usr/local/sbin/gway-hdmi-kiosk-layout
+          test -f /etc/systemd/system/gway-hdmi-kiosk.service
+          test -f /etc/systemd/system/gway-hdmi-kiosk-layout.service.d/20-bastion-refresh-order.conf
+          test -f /etc/default/gway-hdmi-kiosk
