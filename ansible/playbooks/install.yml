@@ -54,6 +54,40 @@
         - gway-hdmi-kiosk-layout.service
       notify: Reload systemd
 
+    - name: Install GWAY HDMI unit drop-ins
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/kiosk/systemd/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - gway-hdmi-kiosk.service.d/98-boot-stagger-30s.conf
+        - gway-hdmi-kiosk-layout.service.d/20-bastion-refresh-order.conf
+        - gway-hdmi-kiosk-layout.service.d/98-boot-stagger-30s.conf
+      notify: Reload systemd
+
+    - name: Detect optional Bastion USB refresh service
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/systemd/system/bastion-usb-refresh.service
+        - /usr/lib/systemd/system/bastion-usb-refresh.service
+        - /lib/systemd/system/bastion-usb-refresh.service
+      register: bastion_refresh_units
+
+    - name: Integrate with installed Bastion USB refresh service
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/kiosk/systemd/bastion-usb-refresh.service.d/60-kiosk-layout.conf"
+        dest: /etc/systemd/system/bastion-usb-refresh.service.d/60-kiosk-layout.conf
+        owner: root
+        group: root
+        mode: "0644"
+      when: bastion_refresh_units.results | selectattr('stat.exists') | list | length > 0
+      notify: Reload systemd
+
     - name: Install default kiosk configuration only on fresh installation
       become: true
       ansible.builtin.copy:
