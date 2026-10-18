@@ -160,6 +160,26 @@
       delay: 2
       until: kiosk_health.status == 200
 
+    - name: Ensure version evidence directory exists
+      when: not kiosk_ci_mode | bool
+      become: true
+      ansible.builtin.file:
+        path: /var/lib/gway-ap-kiosk
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Record verified installed kiosk revision after successful health check
+      when: not kiosk_ci_mode | bool
+      become: true
+      ansible.builtin.copy:
+        dest: /var/lib/gway-ap-kiosk/installed-revision
+        content: "{{ lookup('pipe', 'git -C ' ~ project_root ~ ' rev-parse HEAD') | trim }}\\n"
+        owner: root
+        group: root
+        mode: "0644"
+
   handlers:
     - name: Reload systemd
       when: not kiosk_ci_mode | bool
