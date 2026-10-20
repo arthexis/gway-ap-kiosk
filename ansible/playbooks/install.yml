@@ -175,7 +175,7 @@
       become: true
       ansible.builtin.copy:
         dest: /var/lib/gway-ap-kiosk/installed-revision
-        content: "{{ lookup('pipe', 'git -C ' ~ project_root ~ ' rev-parse HEAD') | trim }}\\n"
+        content: "{{ lookup('pipe', 'git -C ' ~ project_root ~ ' rev-parse HEAD') | trim }}"
         owner: root
         group: root
         mode: "0644"
