@@ -23,9 +23,18 @@
         group: root
         mode: "0755"
       loop:
-        - "{{ kiosk_home }}/.local/bin"
+        - /usr/local/bin
         - /usr/local/sbin
         - /usr/local/libexec
+
+    - name: Keep shared operator CLI directory writable
+      become: true
+      ansible.builtin.file:
+        path: "{{ kiosk_home }}/.local/bin"
+        state: directory
+        owner: "{{ kiosk_user }}"
+        group: "{{ kiosk_user }}"
+        mode: "0755"
 
     - name: Install kiosk and AP runtime executables
       become: true
@@ -36,8 +45,8 @@
         group: root
         mode: "0755"
       loop:
-        - { src: kiosk/bin/gway-kiosk-status, dest: /home/arthe/.local/bin/gway-kiosk-status }
-        - { src: kiosk/bin/kiosk-mode, dest: /home/arthe/.local/bin/kiosk-mode }
+        - { src: kiosk/bin/gway-kiosk-status, dest: /usr/local/bin/gway-kiosk-status }
+        - { src: kiosk/bin/kiosk-mode, dest: /usr/local/bin/kiosk-mode }
         - { src: kiosk/sbin/gway-hdmi-kiosk-session, dest: /usr/local/sbin/gway-hdmi-kiosk-session }
         - { src: kiosk/sbin/gway-hdmi-kiosk-layout, dest: /usr/local/sbin/gway-hdmi-kiosk-layout }
         - { src: kiosk/libexec/gway-boot-stagger-until, dest: /usr/local/libexec/gway-boot-stagger-until }
