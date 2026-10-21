@@ -9,7 +9,7 @@ User=arthe
 Group=arthe
 Environment=PYTHONUNBUFFERED=1
 EnvironmentFile=-/etc/default/gway-hdmi-kiosk
-ExecStart=/home/arthe/.local/bin/gway-kiosk-status --host 127.0.0.1 --port 8899
+ExecStart=/usr/local/bin/gway-kiosk-status --host 127.0.0.1 --port 8899
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=yes

@@ -23,9 +23,18 @@
         group: root
         mode: "0755"
       loop:
-        - "{{ kiosk_home }}/.local/bin"
+        - /usr/local/bin
         - /usr/local/sbin
         - /usr/local/libexec
+
+    - name: Keep shared operator CLI directory writable
+      become: true
+      ansible.builtin.file:
+        path: "{{ kiosk_home }}/.local/bin"
+        state: directory
+        owner: "{{ kiosk_user }}"
+        group: "{{ kiosk_user }}"
+        mode: "0755"
 
     - name: Install kiosk and AP runtime executables
       become: true
@@ -36,12 +45,13 @@
         group: root
         mode: "0755"
       loop:
-        - { src: kiosk/bin/gway-kiosk-status, dest: /home/arthe/.local/bin/gway-kiosk-status }
-        - { src: kiosk/bin/kiosk-mode, dest: /home/arthe/.local/bin/kiosk-mode }
+        - { src: kiosk/bin/gway-kiosk-status, dest: /usr/local/bin/gway-kiosk-status }
+        - { src: kiosk/bin/kiosk-mode, dest: /usr/local/bin/kiosk-mode }
         - { src: kiosk/sbin/gway-hdmi-kiosk-session, dest: /usr/local/sbin/gway-hdmi-kiosk-session }
         - { src: kiosk/sbin/gway-hdmi-kiosk-layout, dest: /usr/local/sbin/gway-hdmi-kiosk-layout }
         - { src: kiosk/libexec/gway-boot-stagger-until, dest: /usr/local/libexec/gway-boot-stagger-until }
         - { src: scripts/ap/kiosk-ap, dest: /usr/local/sbin/kiosk-ap }
+      notify: Restart kiosk status
 
     - name: Install restricted AP rotation sudoers policy
       become: true
@@ -66,7 +76,9 @@
         - gway-kiosk-status.service
         - gway-hdmi-kiosk.service
         - gway-hdmi-kiosk-layout.service
-      notify: Reload systemd
+      notify:
+        - Reload systemd
+        - Restart kiosk status
 
     - name: Prepare GWAY HDMI systemd drop-in directories
       become: true
@@ -186,3 +198,10 @@
       become: true
       ansible.builtin.systemd_service:
         daemon_reload: true
+
+    - name: Restart kiosk status
+      when: not kiosk_ci_mode | bool
+      become: true
+      ansible.builtin.systemd_service:
+        name: gway-kiosk-status.service
+        state: restarted
