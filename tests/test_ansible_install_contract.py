@@ -51,3 +51,20 @@ def test_old_hdmi_names_are_not_installed():
     assert "kiosk/tools/install.sh" not in playbook
     for name in ("arthexis-hdmi-kiosk.service", "arthexis-hdmi-kiosk-layout.service"):
         assert not (ROOT / "kiosk/systemd" / name).exists()
+
+
+def test_kiosk_preserves_operator_bin_ownership_and_system_paths():
+    playbook = (ROOT / "ansible/playbooks/install.yml").read_text()
+    assert 'path: "{{ kiosk_home }}/.local/bin"' in playbook
+    assert 'owner: "{{ kiosk_user }}"' in playbook
+    assert 'dest: /usr/local/bin/gway-kiosk-status' in playbook
+    assert 'dest: /usr/local/bin/kiosk-mode' in playbook
+    assert 'dest: /home/arthe/.local/bin/' not in playbook
+    for path in (
+        ROOT / "kiosk/systemd/gway-kiosk-status.service",
+        ROOT / "kiosk/applications/kiosk-mode.desktop",
+        ROOT / "kiosk/desktop/Kiosk Mode.desktop",
+    ):
+        content = path.read_text()
+        assert "/home/arthe/.local/bin/" not in content
+        assert "/usr/local/bin/" in content
