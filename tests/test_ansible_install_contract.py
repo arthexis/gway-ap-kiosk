@@ -45,6 +45,14 @@ def test_hdmi_unit_dropins_are_installed_and_reference_existing_units():
     assert "when: bastion_refresh_units.results" in playbook
 
 
+def test_hdmi_kiosk_unit_provisions_private_state_for_its_browser_profile():
+    unit = (ROOT / "kiosk/systemd/gway-hdmi-kiosk.service").read_text()
+    assert "User=arthe" in unit
+    assert "Group=arthe" in unit
+    assert "StateDirectory=gway-hdmi-kiosk" in unit
+    assert "StateDirectoryMode=0700" in unit
+
+
 def test_old_hdmi_names_are_not_installed():
     playbook = (ROOT / "ansible/playbooks/install.yml").read_text()
     assert "arthexis-hdmi-kiosk" not in playbook
