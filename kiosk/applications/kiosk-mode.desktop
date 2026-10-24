@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Kiosk Mode
+Name=Kiosk Mode On
 Comment=Start the GWAY HDMI kiosk while the bastion key is present
 Exec=/usr/local/bin/kiosk-mode on
 Icon=video-display
