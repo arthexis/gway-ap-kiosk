@@ -4,7 +4,7 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 started=$SECONDS
 # A verified same-revision installation needs no Ansible convergence.
 # Explicit Ansible options always force the full playbook.
-if [[ $# -eq 0 && ${GWAY_KIOSK_FORCE_DEPLOY:-0} != 1 ]]; then
+if [[ $# -eq 0 ]]; then
   revision=$(git -C "$repo_dir" rev-parse HEAD)
   installed=$(cat /var/lib/gway-ap-kiosk/installed-revision 2>/dev/null || true)
   if [[ "$revision" == "$installed" ]] &&
