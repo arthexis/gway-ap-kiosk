@@ -161,7 +161,7 @@ def ap_signup_qr_svg():
 
 def render_html(payload):
     ap = payload["ap"]
-    rfid = payload["rfid"]
+    rfid = payload.get("rfid") or {"installed": False, "card": "Not Installed", "seen_at": ""}
     ssid = html.escape(ap["ssid"])
     interface = html.escape(ap["interface"])
     updated = html.escape(ap["updated_at"])
