@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
 """Standalone local AP and kiosk status page; no external application integrations."""
 import argparse
+from datetime import datetime, timezone
 import html
 import http.server
 import ipaddress
 import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import threading
 import time
-from datetime import datetime, timezone
 
 AP_RESET_PATH = "/kiosk/status/ap/reset/"
+KIOSK_MODE_OFF_PATH = "/kiosk/status/kiosk-mode/off/"
 AP_ROTATE_COMMAND = Path("/usr/local/sbin/kiosk-ap")
 AP_STATUS_COMMAND = Path("/usr/local/sbin/kiosk-ap")
+KIOSK_MODE_COMMAND = Path("/usr/local/bin/kiosk-mode")
+BASTION_KEY_CHECK = Path(os.environ.get("KIOSK_BASTION_CHECK", "/usr/local/libexec/bastion-key-present"))
 AP_SIGNUP_URL = "http://10.42.0.1/"
 RFID_PUBLISHER_COMMAND = Path("/home/arthe/.local/bin/rfid-scan-publisher")
 RFID_SCAN_FILE = Path("/home/arthe/.local/state/rfid-mode/rfid-scan.json")
+FTP_DROP_DIRECTORY = Path(os.environ.get("GWAY_FTP_DROP_DIRECTORY", "/srv/prodigy-ftp/drop"))
+FTP_DROP_MAX_FILES = 50
+SYSTEM_STATUS_FILE = Path(os.environ.get(
+    "GWAY_KIOSK_SYSTEM_STATUS_FILE", "/home/arthe/.local/state/lcd-lockfiles/lcd-system-info.json"
+))
+SYSTEM_STATUS_MAX_FRAMES = 12
 # QR version 2-M for AP_SIGNUP_URL, with no password or other credential data.
 AP_SIGNUP_QR_MATRIX = (
     "1111111010111011101111111", "1000001001000110101000001",
@@ -35,7 +45,6 @@ AP_SIGNUP_QR_MATRIX = (
     "1011101011001110000110011", "1000001000011010100110000",
     "1111111010000111110001001",
 )
-
 
 def truthy(value):
     return str(value or "").lower() in {"1", "yes", "true", "on"}
@@ -138,8 +147,91 @@ def rfid_context():
     return {"installed": True, "card": card or "No scans yet", "seen_at": seen_at}
 
 
+def file_size_label(size):
+    """Format a public drop-file size without exposing its contents."""
+    for unit, limit in (("MiB", 1024 * 1024), ("KiB", 1024)):
+        if size >= limit:
+            return f"{size / limit:.1f} {unit}"
+    return f"{size} B"
+
+
+def ftp_drop_context():
+    """List regular files in the existing FTP drop directory, never file data."""
+    try:
+        entries = []
+        for candidate in FTP_DROP_DIRECTORY.iterdir():
+            try:
+                metadata = candidate.lstat()
+            except OSError:
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                continue
+            entries.append({
+                "name": candidate.name,
+                "size": file_size_label(metadata.st_size),
+                "modified": datetime.fromtimestamp(
+                    metadata.st_mtime, timezone.utc
+                ).isoformat(timespec="minutes").replace("+00:00", "Z"),
+                "sort_key": (-metadata.st_mtime, candidate.name.casefold()),
+            })
+    except OSError:
+        return {"available": False, "files": [], "message": "FTP drop unavailable"}
+    entries.sort(key=lambda entry: entry.pop("sort_key"))
+    files = entries[:FTP_DROP_MAX_FILES]
+    message = "Select a file for details" if files else "No files in FTP drop"
+    return {"available": True, "files": files, "message": message}
+
+
+def system_status_context():
+    """Reuse the LCD publisher's public system frames without adding collectors."""
+    try:
+        payload = json.loads(SYSTEM_STATUS_FILE.read_text(encoding="utf-8"))
+        raw_frames = payload.get("frames")
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {"available": False, "frames": [], "message": "System status unavailable"}
+    if not isinstance(raw_frames, list):
+        return {"available": False, "frames": [], "message": "System status unavailable"}
+    frames = []
+    for raw_frame in raw_frames:
+        if not isinstance(raw_frame, dict):
+            continue
+        line1 = str(raw_frame.get("line1") or "").strip()[:80]
+        line2 = str(raw_frame.get("line2") or "").strip()[:80]
+        if line1 or line2:
+            frames.append({"line1": line1, "line2": line2})
+    frames = frames[:SYSTEM_STATUS_MAX_FRAMES]
+    return {
+        "available": bool(frames),
+        "frames": frames,
+        "message": "" if frames else "System status unavailable",
+    }
+
+
+def bastion_key_present():
+    """Use the existing Bastion verifier; do not infer presence from a mountpoint."""
+    if not BASTION_KEY_CHECK.is_file() or not os.access(BASTION_KEY_CHECK, os.X_OK):
+        return False
+    try:
+        return subprocess.run(
+            [str(BASTION_KEY_CHECK), "--quiet"], capture_output=True,
+            check=False, timeout=5,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def kiosk_mode_context():
+    return {"key_present": bastion_key_present()}
+
+
 def build_payload(client_ip="127.0.0.1"):
-    return {"ap": ap_context(client_ip), "rfid": rfid_context()}
+    return {
+        "ap": ap_context(client_ip),
+        "rfid": rfid_context(),
+        "ftp": ftp_drop_context(),
+        "system": system_status_context(),
+        "kiosk": kiosk_mode_context(),
+    }
 
 
 def ap_signup_qr_svg():
@@ -161,7 +253,14 @@ def ap_signup_qr_svg():
 
 def render_html(payload):
     ap = payload["ap"]
-    rfid = payload.get("rfid") or {"installed": False, "card": "Not Installed", "seen_at": ""}
+    rfid = payload["rfid"]
+    ftp = payload.get("ftp") or {
+        "available": False, "files": [], "message": "FTP drop unavailable"
+    }
+    system = payload.get("system") or {
+        "available": False, "frames": [], "message": "System status unavailable"
+    }
+    kiosk = payload.get("kiosk") or {"key_present": False}
     ssid = html.escape(ap["ssid"])
     interface = html.escape(ap["interface"])
     updated = html.escape(ap["updated_at"])
@@ -172,25 +271,100 @@ def render_html(payload):
         '<button type="submit">Rotate AP password</button></form>'
         if truthy(os.environ.get("GWAY_KIOSK_ALLOW_AP_ROTATION")) else ""
     )
+    ftp_files = "".join(
+        '<li><button class="ftp-file" type="button" data-name="{name}" '
+        'data-size="{size}" data-modified="{modified}">{name}</button></li>'.format(
+            name=html.escape(entry["name"], quote=True),
+            size=html.escape(entry["size"], quote=True),
+            modified=html.escape(entry["modified"], quote=True),
+        )
+        for entry in ftp["files"]
+    ) or '<li class="ftp-empty">No files in FTP drop</li>'
+    ftp_message = html.escape(ftp["message"])
+    system_frames = system["frames"]
+    first_system_frame = system_frames[0] if system_frames else {"line1": system["message"], "line2": ""}
+    system_frames_json = json.dumps(system_frames, ensure_ascii=False, separators=(",", ":"))
+    system_frames_json = (system_frames_json.replace("<", "\\u003c").replace(">", "\\u003e")
+                       .replace("&", "\\u0026"))
+    kiosk_mode_control = (
+        f'<div class="kiosk-mode-row"><form id="kiosk-mode-off-form" method="post" action="{KIOSK_MODE_OFF_PATH}">'
+        '<button id="kiosk-mode-off" class="kiosk-mode-off" type="submit">Kiosk Mode Off</button></form></div>'
+        if kiosk["key_present"] else ""
+    )
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>GWAY status</title><style>
 body{{font:1.1rem system-ui,sans-serif;background:#121821;color:#f5f7fa;margin:0;padding:2rem}}
 main{{min-height:calc(100vh - 4rem);display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:1rem}}
-.panel{{background:#202b38;padding:1.5rem;border-radius:1rem;min-width:0;min-height:0}}.panel h2{{margin-top:0}}
+.panel{{background:#202b38;padding:1.5rem;border-radius:1rem;min-width:0;min-height:0}}
 .ap-panel{{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:1rem;align-items:center}}
 dt{{color:#a9b8c8;margin-top:1rem}}dd{{margin:.2rem 0}}button{{padding:.7rem 1.2rem}}
-.signup{{text-align:center}}.signup h3{{font-size:1rem;margin:0 0:.5rem}}.signup p{{font-size:.85rem;margin:.5rem 0 0}}
+.signup{{text-align:center}}.signup p{{font-size:.85rem;margin:.5rem 0 0}}
 .signup-qr{{display:block;width:7rem;height:7rem;background:#fff;border-radius:.35rem;padding:.5rem}}
 .rfid-card{{font:600 1.6rem ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}}
-.reserved{{background:#1a2430}}@media (max-width:32rem){{main{{grid-template-columns:1fr;grid-template-rows:repeat(4,minmax(12rem,1fr))}}.ap-panel{{grid-template-columns:1fr}}.signup{{justify-self:start}}}}
-</style></head><body><main aria-label="GWAY status dashboard"><section class="panel ap-panel"><div><h2>Access Point</h2>
+.system-panel{{display:grid;place-items:center;text-align:center}}.system-line{{margin:.15rem 0;font:600 clamp(1.15rem,3vw,2rem) ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}}.system-meta{{margin:.75rem 0 0;color:#a9b8c8;font-size:.85rem}}.kiosk-mode-row{{margin-top:.8rem}}.kiosk-mode-off{{padding:.35rem .65rem;font-size:.8rem}}.ftp-panel{{display:flex;flex-direction:column}}.ftp-heading{{display:flex;justify-content:flex-end}}.ftp-files{{list-style:none;margin:.75rem 0 0;padding:0;overflow:auto;min-height:0}}.ftp-file{{display:block;width:100%;padding:.55rem .25rem;text-align:left;border:0;border-bottom:1px solid #3d4a59;background:transparent;color:inherit;overflow-wrap:anywhere}}.ftp-file:hover,.ftp-file:focus{{background:#304156}}.ftp-message,.ftp-selection{{margin:.25rem 0;color:#c3d0dc;font-size:.9rem}}.ftp-empty{{color:#c3d0dc}}@media (max-width:32rem){{main{{grid-template-columns:1fr;grid-template-rows:repeat(4,minmax(12rem,1fr))}}.ap-panel{{grid-template-columns:1fr}}.signup{{justify-self:start}}}}
+</style></head><body><main aria-label="GWAY status dashboard"><section class="panel ap-panel"><div>
 <dl><dt>SSID</dt><dd>{ssid or "Unavailable"}</dd><dt>Interface</dt><dd>{interface or "Unknown"}</dd>
-<dt>Updated</dt><dd>{updated or "Waiting for first refresh"}</dd></dl>{rotate_button}</div><aside class="signup"><h3>AP signup</h3>
+<dt>Updated</dt><dd>{updated or "Waiting for first refresh"}</dd></dl>{rotate_button}</div><aside class="signup">
 {ap_signup_qr_svg()}<p>Scan to open <a href="{AP_SIGNUP_URL}">10.42.0.1</a></p></aside></section>
-<section class="panel rfid-panel"><h2>Last RFID card</h2><dl><dt>Card</dt><dd class="rfid-card">{rfid_card}</dd>{("<dt>Seen</dt><dd>" + rfid_seen_at + "</dd>") if rfid_seen_at else ""}</dl></section>
-<section class="panel reserved" aria-label="Reserved"></section><section class="panel reserved" aria-label="Reserved"></section>
-</main></body></html>"""
+<section class="panel rfid-panel"><dl><dt>Card</dt><dd class="rfid-card">{rfid_card}</dd>{("<dt>Seen</dt><dd>" + rfid_seen_at + "</dd>") if rfid_seen_at else ""}</dl></section>
+<section class="panel system-panel" aria-label="System status"><div aria-live="polite"><p id="system-line1" class="system-line">{html.escape(first_system_frame["line1"])}</p><p id="system-line2" class="system-line">{html.escape(first_system_frame["line2"])}</p><p id="system-meta" class="system-meta"></p>{kiosk_mode_control}</div></section><section class="panel ftp-panel" aria-label="FTP drop"><div class="ftp-heading"><button id="ftp-refresh" type="button">Refresh</button></div><p id="ftp-message" class="ftp-message">{ftp_message}</p><ul id="ftp-files" class="ftp-files">{ftp_files}</ul><p id="ftp-selection" class="ftp-selection">Select a file for details</p></section>
+</main><script>
+const ftpFiles = document.getElementById("ftp-files");
+const ftpMessage = document.getElementById("ftp-message");
+const ftpSelection = document.getElementById("ftp-selection");
+const systemLine1 = document.getElementById("system-line1");
+const systemLine2 = document.getElementById("system-line2");
+const systemMeta = document.getElementById("system-meta");
+let systemFrames = {system_frames_json};
+let systemFrameIndex = 0;
+function showSystemFrame() {{
+  const frame = systemFrames[systemFrameIndex];
+  systemLine1.textContent = frame ? frame.line1 : "System status unavailable";
+  systemLine2.textContent = frame ? frame.line2 : "";
+  systemMeta.textContent = frame ? `${{systemFrameIndex + 1}} / ${{systemFrames.length}}` : "";
+}}
+function setSystemFrames(frames) {{
+  systemFrames = Array.isArray(frames) ? frames : []; systemFrameIndex = 0; showSystemFrame();
+}}
+function chooseFtpFile(button) {{
+  ftpSelection.textContent = `${{button.dataset.name}} — ${{button.dataset.size}}, modified ${{button.dataset.modified}}`;
+}}
+function addFtpFile(file) {{
+  const item = document.createElement("li");
+  const button = document.createElement("button");
+  button.className = "ftp-file"; button.type = "button";
+  button.dataset.name = file.name; button.dataset.size = file.size; button.dataset.modified = file.modified;
+  button.textContent = file.name; button.addEventListener("click", () => chooseFtpFile(button));
+  item.append(button); ftpFiles.append(item);
+}}
+document.querySelectorAll(".ftp-file").forEach((button) => button.addEventListener("click", () => chooseFtpFile(button)));
+const kioskModeOffForm = document.getElementById("kiosk-mode-off-form");
+if (kioskModeOffForm) {{
+  kioskModeOffForm.addEventListener("submit", async (event) => {{
+    event.preventDefault();
+    const button = document.getElementById("kiosk-mode-off"); button.disabled = true;
+    try {{
+      const response = await fetch(kioskModeOffForm.action, {{method: "POST", headers: {{Accept: "application/json"}}}});
+      const result = await response.json();
+      if (!response.ok || !result.ok) {{ button.disabled = false; button.textContent = "Kiosk Mode Off failed"; }}
+    }} catch (_) {{ button.disabled = false; button.textContent = "Kiosk Mode Off failed"; }}
+  }});
+}}
+document.getElementById("ftp-refresh").addEventListener("click", async () => {{
+  ftpMessage.textContent = "Refreshing…";
+  try {{
+    const response = await fetch("/kiosk/status/data/", {{cache: "no-store"}});
+    const data = await response.json(); const ftp = data.ftp;
+    ftpFiles.replaceChildren(); ftp.files.forEach(addFtpFile);
+    if (!ftp.files.length) {{ ftpFiles.innerHTML = '<li class="ftp-empty">No files in FTP drop</li>'; }}
+    ftpMessage.textContent = ftp.message; ftpSelection.textContent = "Select a file for details";
+    setSystemFrames(data.system ? data.system.frames : []);
+  }} catch (_) {{ ftpMessage.textContent = "Unable to refresh FTP drop"; }}
+}});
+showSystemFrame();
+setInterval(() => {{ if (systemFrames.length) {{ systemFrameIndex = (systemFrameIndex + 1) % systemFrames.length; showSystemFrame(); }} }}, 5000);
+</script></body></html>"""
 
 
 def reset_access_point():
@@ -202,6 +376,31 @@ def reset_access_point():
         ).returncode == 0
     except (OSError, subprocess.SubprocessError):
         return False
+
+
+def disable_kiosk_mode():
+    """Call only the existing guarded kiosk-mode command, never systemctl directly."""
+    if not bastion_key_present() or not KIOSK_MODE_COMMAND.is_file() or not os.access(KIOSK_MODE_COMMAND, os.X_OK):
+        return False
+    try:
+        command_env = os.environ.copy()
+        command_env["KIOSK_MODE_SYSTEMCTL_DIRECT"] = "1"
+        return subprocess.run(
+            [str(KIOSK_MODE_COMMAND), "off"], capture_output=True, check=False, timeout=30,
+            env=command_env,
+        ).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def local_same_origin(handler):
+    host = handler.headers.get("Host", "")
+    origin = handler.headers.get("Origin", "")
+    return (
+        client_is_loopback(handler.client_address[0])
+        and host in {"localhost", "127.0.0.1", "[::1]", "localhost:8899", "127.0.0.1:8899", "[::1]:8899"}
+        and origin in {"http://" + host, "https://" + host}
+    )
 
 
 class KioskStatusHandler(http.server.BaseHTTPRequestHandler):
@@ -228,18 +427,17 @@ class KioskStatusHandler(http.server.BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_POST(self):
-        if self.path.split("?", 1)[0] != AP_RESET_PATH:
+        path = self.path.split("?", 1)[0]
+        if path not in {AP_RESET_PATH, KIOSK_MODE_OFF_PATH}:
             return self._send(404, "text/plain; charset=utf-8", b"not found\n")
-        host = self.headers.get("Host", "")
-        origin = self.headers.get("Origin", "")
-        if (
-            not client_is_loopback(self.client_address[0])
-            or not truthy(os.environ.get("GWAY_KIOSK_ALLOW_AP_ROTATION"))
-            or host not in {"localhost", "127.0.0.1", "[::1]", "localhost:8899", "127.0.0.1:8899", "[::1]:8899"}
-            or origin not in {"http://" + host, "https://" + host}
-        ):
+        if not local_same_origin(self):
             return self._send(403, "application/json", b'{"ok":false}')
-        ok = reset_access_point()
+        if path == AP_RESET_PATH:
+            if not truthy(os.environ.get("GWAY_KIOSK_ALLOW_AP_ROTATION")):
+                return self._send(403, "application/json", b'{"ok":false}')
+            ok = reset_access_point()
+        else:
+            ok = disable_kiosk_mode()
         return self._send(200 if ok else 502, "application/json", json.dumps({"ok": ok}).encode())
 
 
@@ -251,7 +449,7 @@ def main(argv=None):
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
     if args.self_test:
-        assert "Access Point" in render_html(build_payload())
+        assert 'aria-label="System status"' in render_html(build_payload())
         return 0
     if args.json:
         print(json.dumps(build_payload(), indent=2))
