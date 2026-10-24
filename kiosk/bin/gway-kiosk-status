@@ -16,6 +16,25 @@ from datetime import datetime, timezone
 AP_RESET_PATH = "/kiosk/status/ap/reset/"
 AP_ROTATE_COMMAND = Path("/usr/local/sbin/kiosk-ap")
 AP_STATUS_COMMAND = Path("/usr/local/sbin/kiosk-ap")
+AP_SIGNUP_URL = "http://10.42.0.1/"
+RFID_PUBLISHER_COMMAND = Path("/home/arthe/.local/bin/rfid-scan-publisher")
+RFID_SCAN_FILE = Path("/home/arthe/.local/state/rfid-mode/rfid-scan.json")
+# QR version 2-M for AP_SIGNUP_URL, with no password or other credential data.
+AP_SIGNUP_QR_MATRIX = (
+    "1111111010111011101111111", "1000001001000110101000001",
+    "1011101010010010001011101", "1011101001001011001011101",
+    "1011101000000110101011101", "1000001010100000101000001",
+    "1111111010101010101111111", "0000000000011010000000000",
+    "1010001100110111000100101", "1010010111010111001001011",
+    "0001111101010001100111101", "0010000010010101101001000",
+    "1111011000001100111000001", "0010000110001001011000011",
+    "1100011101001111101011101", "0011100100111010000000000",
+    "1100101001000111111110010", "0000000011100111100010101",
+    "1111111010110000101011001", "1000001001000100100010010",
+    "1011101001111101111111011", "1011101000101000100111110",
+    "1011101011001110000110011", "1000001000011010100110000",
+    "1111111010000111110001001",
+)
 
 
 def truthy(value):
@@ -104,15 +123,50 @@ def ap_context(client_ip="127.0.0.1"):
     return AP_SNAPSHOT.read()
 
 
+def rfid_context():
+    """Read the last published RFID scan without invoking RFID hardware or services."""
+    if not RFID_PUBLISHER_COMMAND.is_file():
+        return {"installed": False, "card": "Not Installed", "seen_at": ""}
+    try:
+        payload = json.loads(RFID_SCAN_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {"installed": True, "card": "No scans yet", "seen_at": ""}
+    if not isinstance(payload, dict):
+        return {"installed": True, "card": "No scans yet", "seen_at": ""}
+    card = str(payload.get("rfid") or payload.get("card_id") or payload.get("uid") or "").strip()
+    seen_at = str(payload.get("seen_at") or payload.get("updated_at") or "").strip()
+    return {"installed": True, "card": card or "No scans yet", "seen_at": seen_at}
+
+
 def build_payload(client_ip="127.0.0.1"):
-    return {"title": "GWAY Kiosk", "ap": ap_context(client_ip)}
+    return {"ap": ap_context(client_ip), "rfid": rfid_context()}
+
+
+def ap_signup_qr_svg():
+    """Render the offline QR for the AP consent portal, not Wi-Fi credentials."""
+    modules = "".join(
+        f"M{x + 4} {y + 4}h1v1h-1z"
+        for y, row in enumerate(AP_SIGNUP_QR_MATRIX)
+        for x, bit in enumerate(row)
+        if bit == "1"
+    )
+    return (
+        '<svg class="signup-qr" xmlns="http://www.w3.org/2000/svg" '
+        'viewBox="0 0 33 33" role="img" aria-labelledby="signup-qr-title" '
+        'shape-rendering="crispEdges"><title id="signup-qr-title">AP signup QR code</title>'
+        '<rect width="33" height="33" fill="#fff"/><path fill="#111" d="'
+        + modules + '"/></svg>'
+    )
 
 
 def render_html(payload):
     ap = payload["ap"]
+    rfid = payload.get("rfid") or {"installed": False, "card": "Not Installed", "seen_at": ""}
     ssid = html.escape(ap["ssid"])
     interface = html.escape(ap["interface"])
     updated = html.escape(ap["updated_at"])
+    rfid_card = html.escape(rfid["card"])
+    rfid_seen_at = html.escape(rfid["seen_at"])
     rotate_button = (
         '<form method="post" action="/kiosk/status/ap/reset/">'
         '<button type="submit">Rotate AP password</button></form>'
@@ -120,13 +174,23 @@ def render_html(payload):
     )
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GWAY Kiosk</title><style>
+<title>GWAY status</title><style>
 body{{font:1.1rem system-ui,sans-serif;background:#121821;color:#f5f7fa;margin:0;padding:2rem}}
-main{{max-width:45rem;margin:auto}}section{{background:#202b38;padding:1.5rem;border-radius:1rem}}
+main{{min-height:calc(100vh - 4rem);display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:1rem}}
+.panel{{background:#202b38;padding:1.5rem;border-radius:1rem;min-width:0;min-height:0}}.panel h2{{margin-top:0}}
+.ap-panel{{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:1rem;align-items:center}}
 dt{{color:#a9b8c8;margin-top:1rem}}dd{{margin:.2rem 0}}button{{padding:.7rem 1.2rem}}
-</style></head><body><main><h1>GWAY Kiosk</h1><section><h2>Access point</h2>
+.signup{{text-align:center}}.signup h3{{font-size:1rem;margin:0 0:.5rem}}.signup p{{font-size:.85rem;margin:.5rem 0 0}}
+.signup-qr{{display:block;width:7rem;height:7rem;background:#fff;border-radius:.35rem;padding:.5rem}}
+.rfid-card{{font:600 1.6rem ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}}
+.reserved{{background:#1a2430}}@media (max-width:32rem){{main{{grid-template-columns:1fr;grid-template-rows:repeat(4,minmax(12rem,1fr))}}.ap-panel{{grid-template-columns:1fr}}.signup{{justify-self:start}}}}
+</style></head><body><main aria-label="GWAY status dashboard"><section class="panel ap-panel"><div><h2>Access Point</h2>
 <dl><dt>SSID</dt><dd>{ssid or "Unavailable"}</dd><dt>Interface</dt><dd>{interface or "Unknown"}</dd>
-<dt>Status</dt><dd>{html.escape(ap["state"])}</dd><dt>Updated</dt><dd>{updated or "Not yet sampled"}</dd></dl>{rotate_button}</section></main></body></html>"""
+<dt>Updated</dt><dd>{updated or "Waiting for first refresh"}</dd></dl>{rotate_button}</div><aside class="signup"><h3>AP signup</h3>
+{ap_signup_qr_svg()}<p>Scan to open <a href="{AP_SIGNUP_URL}">10.42.0.1</a></p></aside></section>
+<section class="panel rfid-panel"><h2>Last RFID card</h2><dl><dt>Card</dt><dd class="rfid-card">{rfid_card}</dd>{("<dt>Seen</dt><dd>" + rfid_seen_at + "</dd>") if rfid_seen_at else ""}</dl></section>
+<section class="panel reserved" aria-label="Reserved"></section><section class="panel reserved" aria-label="Reserved"></section>
+</main></body></html>"""
 
 
 def reset_access_point():
@@ -187,7 +251,7 @@ def main(argv=None):
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args(argv)
     if args.self_test:
-        assert "GWAY Kiosk" in render_html(build_payload())
+        assert "Access Point" in render_html(build_payload())
         return 0
     if args.json:
         print(json.dumps(build_payload(), indent=2))
