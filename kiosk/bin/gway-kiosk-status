@@ -9,6 +9,9 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import threading
+import time
+from datetime import datetime, timezone
 
 AP_RESET_PATH = "/kiosk/status/ap/reset/"
 AP_ROTATE_COMMAND = Path("/usr/local/sbin/kiosk-ap")
@@ -26,27 +29,79 @@ def client_is_loopback(address):
         return False
 
 
-def ap_context(client_ip="127.0.0.1"):
-    """Read only public AP metadata; never read a password file."""
-    empty = {"available": False, "ssid": "", "interface": "", "updated_at": "", "state": "unavailable"}
+# Probe NetworkManager outside HTTP handlers; requests only read this snapshot.
+AP_POLL_SECONDS = 5
+AP_STALE_SECONDS = 30
+AP_PROBE_TIMEOUT = 15
+
+
+def empty_ap(state="unavailable"):
+    return {"available": False, "ssid": "", "interface": "",
+            "updated_at": "", "state": state}
+
+
+class APStatusSnapshot:
+    def __init__(self, clock=time.monotonic):
+        self.clock = clock
+        self.lock = threading.Lock()
+        self.data = empty_ap()
+        self.sampled_at = None
+
+    def update(self, data):
+        with self.lock:
+            self.data = data
+            self.sampled_at = self.clock()
+
+    def read(self):
+        with self.lock:
+            data = dict(self.data)
+            sampled_at = self.sampled_at
+        if sampled_at is not None and self.clock() - sampled_at > AP_STALE_SECONDS:
+            data["state"] = "stale"
+            data["available"] = False
+        elif sampled_at is None:
+            data["state"] = "stale"
+        return data
+
+
+AP_SNAPSHOT = APStatusSnapshot()
+
+
+def probe_ap():
     if not AP_STATUS_COMMAND.is_file():
-        return empty
+        return empty_ap()
     try:
         result = subprocess.run(
             [str(AP_STATUS_COMMAND), "status"], capture_output=True,
-            text=True, check=False, timeout=5,
+            text=True, check=False, timeout=AP_PROBE_TIMEOUT,
         )
         data = json.loads(result.stdout)
+        state = data.get("state", "unavailable")
+        if state not in {"selected", "not_configured", "ambiguous",
+                         "invalid_selection", "unavailable"}:
+            state = "unavailable"
         ap = data.get("ap") or {}
-        return {
-            "available": data.get("state") == "selected",
-            "ssid": str(ap.get("ssid") or ""),
-            "interface": str(ap.get("interface") or ""),
-            "updated_at": "",
-            "state": str(data.get("state") or "unavailable"),
-        }
+        return {"available": state == "selected",
+                "ssid": str(ap.get("ssid") or "") if state == "selected" else "",
+                "interface": str(ap.get("interface") or "") if state == "selected" else "",
+                "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "state": state}
+    except subprocess.TimeoutExpired:
+        return None  # Retain last known sample; freshness will mark it stale.
     except (OSError, subprocess.SubprocessError, ValueError, TypeError, AttributeError):
-        return empty
+        return empty_ap()
+
+
+def poll_ap(snapshot=AP_SNAPSHOT, probe=probe_ap, pause=time.sleep):
+    while True:
+        result = probe()
+        if result is not None:
+            snapshot.update(result)
+        pause(AP_POLL_SECONDS)
+
+
+def ap_context(client_ip="127.0.0.1"):
+    return AP_SNAPSHOT.read()
 
 
 def build_payload(client_ip="127.0.0.1"):
@@ -71,7 +126,7 @@ main{{max-width:45rem;margin:auto}}section{{background:#202b38;padding:1.5rem;bo
 dt{{color:#a9b8c8;margin-top:1rem}}dd{{margin:.2rem 0}}button{{padding:.7rem 1.2rem}}
 </style></head><body><main><h1>GWAY Kiosk</h1><section><h2>Access point</h2>
 <dl><dt>SSID</dt><dd>{ssid or "Unavailable"}</dd><dt>Interface</dt><dd>{interface or "Unknown"}</dd>
-<dt>Updated</dt><dd>{updated or "Unknown"}</dd></dl>{rotate_button}</section></main></body></html>"""
+<dt>Status</dt><dd>{html.escape(ap["state"])}</dd><dt>Updated</dt><dd>{updated or "Not yet sampled"}</dd></dl>{rotate_button}</section></main></body></html>"""
 
 
 def reset_access_point():
@@ -139,6 +194,7 @@ def main(argv=None):
         return 0
     if not client_is_loopback(args.host):
         parser.error("kiosk status must bind to a loopback address")
+    threading.Thread(target=poll_ap, daemon=True, name="ap-status-probe").start()
     server = http.server.ThreadingHTTPServer((args.host, args.port), KioskStatusHandler)
     try:
         server.serve_forever()
