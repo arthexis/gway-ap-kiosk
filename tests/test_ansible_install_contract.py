@@ -76,3 +76,23 @@ def test_kiosk_preserves_operator_bin_ownership_and_system_paths():
         content = path.read_text()
         assert "/home/arthe/.local/bin/" not in content
         assert "/usr/local/bin/" in content
+
+
+def test_ansible_installs_the_kiosk_mode_on_desktop_launcher():
+    playbook = (ROOT / "ansible/playbooks/install.yml").read_text()
+    desktop = (ROOT / "kiosk/desktop/Kiosk Mode.desktop").read_text()
+    application = (ROOT / "kiosk/applications/kiosk-mode.desktop").read_text()
+    assert "Desktop/Kiosk Mode On.desktop" in playbook
+    assert "Name=Kiosk Mode On" in desktop
+    assert "Name=Kiosk Mode On" in application
+    assert "Exec=/usr/local/bin/kiosk-mode on" in desktop
+
+
+def test_ansible_installs_narrow_kiosk_layout_polkit_policy():
+    playbook = (ROOT / "ansible/playbooks/install.yml").read_text()
+    rule = ROOT / "config/polkit-1/rules.d/49-gway-kiosk-layout.rules"
+    assert rule.is_file()
+    assert "49-gway-kiosk-layout.rules" in playbook
+    content = rule.read_text()
+    assert 'action.lookup("unit") === "gway-hdmi-kiosk-layout.service"' in content
+    assert 'action.lookup("verb") === "start"' in content
