@@ -36,6 +36,30 @@
         group: "{{ kiosk_user }}"
         mode: "0755"
 
+    - name: Prepare kiosk desktop launcher directories
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: "{{ kiosk_user }}"
+        group: "{{ kiosk_user }}"
+        mode: "0755"
+      loop:
+        - "{{ kiosk_home }}/Desktop"
+        - "{{ kiosk_home }}/.local/share/applications"
+
+    - name: Install Kiosk Mode On desktop launchers
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/{{ item.src }}"
+        dest: "{{ kiosk_home }}/{{ item.dest }}"
+        owner: "{{ kiosk_user }}"
+        group: "{{ kiosk_user }}"
+        mode: "0644"
+      loop:
+        - { src: kiosk/desktop/Kiosk Mode.desktop, dest: Desktop/Kiosk Mode On.desktop }
+        - { src: kiosk/applications/kiosk-mode.desktop, dest: .local/share/applications/kiosk-mode.desktop }
+
     - name: Install kiosk and AP runtime executables
       become: true
       ansible.builtin.copy:
@@ -63,6 +87,15 @@
         content: |
           {{ kiosk_user }} ALL=(root) NOPASSWD: /usr/local/sbin/kiosk-ap rotate
         validate: /usr/sbin/visudo -cf %s
+
+    - name: Install restricted kiosk-layout Polkit policy
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/config/polkit-1/rules.d/49-gway-kiosk-layout.rules"
+        dest: /etc/polkit-1/rules.d/49-gway-kiosk-layout.rules
+        owner: root
+        group: root
+        mode: "0644"
 
     - name: Install kiosk systemd services
       become: true

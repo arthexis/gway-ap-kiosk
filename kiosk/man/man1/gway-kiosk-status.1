@@ -1,6 +1,6 @@
-.TH GWAY-KIOSK-STATUS 1 "2026-08-08" "GWAY local tools" "User Commands"
+.TH GWAY-KIOSK-STATUS 1 "2026-10-23" "GWAY local tools" "User Commands"
 .SH NAME
-gway-kiosk-status \- serve the local GWAY AP, card, system, and TODO kiosk page
+gway-kiosk-status \- serve the local GWAY AP, RFID, and FTP-drop kiosk page
 .SH SYNOPSIS
 .B gway-kiosk-status
 [\fB--host\fR ADDRESS]
@@ -10,9 +10,19 @@ gway-kiosk-status \- serve the local GWAY AP, card, system, and TODO kiosk page
 .SH DESCRIPTION
 .B gway-kiosk-status
 serves a loopback-only kiosk dashboard for this host. The page reads local AP
-credentials, RFID scanner state, LCD history, system warnings, service health,
-and the host-local TODO queue without requiring Arthexis source routes or
-templates.
+status, the last published RFID scan, the LCD publisher's public system-info
+frames, and regular-file metadata from the existing FTP drop directory. It
+never displays AP credentials or file contents, and it does not operate,
+reconfigure, or proxy the LCD or FTP services.
+.PP
+When the Bastion verifier reports a present key, the system-status panel offers
+the existing guarded
+.B kiosk-mode off
+action. The request must be loopback and same-origin, and the command verifies
+the key again before changing kiosk mode. The status service retains
+.B NoNewPrivileges=yes
+and the action receives Polkit permission only to start
+.B gway-hdmi-kiosk-layout.service .
 .PP
 The installed system service listens on
 .BR http://127.0.0.1:8899/ .
@@ -31,20 +41,26 @@ Print one kiosk JSON payload and exit.
 Build one page, validate key sections, and exit.
 .SH ENVIRONMENT
 .TP
-.B GWAY_KIOSK_TODO_FILE
-TODO file to display. Defaults to /home/arthe/TODO.txt.
+.B GWAY_FTP_DROP_DIRECTORY
+FTP drop directory to list. Defaults to /srv/prodigy-ftp/drop.
 .TP
-.B GWAY_KIOSK_WORKGROUP_FILE
-Active work status file. Defaults to /home/arthe/workgroup.txt.
+.B GWAY_KIOSK_SYSTEM_STATUS_FILE
+Published LCD system-info frame file to read. Defaults to
+/home/arthe/.local/state/lcd-lockfiles/lcd-system-info.json.
 .TP
-.B GWAY_KIOSK_WORK_ACTIVE_MAX_AGE_MINUTES
-Maximum workgroup entry age considered active. Defaults to 360.
+.B GWAY_KIOSK_ALLOW_AP_ROTATION
+Permit the separately authorized AP password rotation control when set to a
+true value. It is disabled by default.
 .TP
-.B GWAY_KIOSK_REFRESH_SECONDS
-Browser refresh polling interval. Defaults to 30.
+.B GWAY_KIOSK_HOST
+Loopback bind address. Defaults to 127.0.0.1.
+.TP
+.B GWAY_KIOSK_PORT
+Listen port. Defaults to 8899.
 .SH FILES
 .TP
-.I /home/arthe/ap-password.txt
-Host-local AP credentials.
+.I /srv/prodigy-ftp/drop
+Read-only source of file names, sizes, and modification times for the kiosk
+FTP-drop panel.
 .SH SEE ALSO
 .BR systemctl (1)

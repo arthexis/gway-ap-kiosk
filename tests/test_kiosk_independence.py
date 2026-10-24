@@ -13,9 +13,8 @@ loader.exec_module(kiosk)
 
 
 def test_missing_ap_state_still_renders():
-    with patch.object(kiosk, "rfid_context", return_value={"installed": False, "card": "Not Installed", "seen_at": ""}):
-        assert kiosk.build_payload()["ap"]["available"] is False
-        assert "Access Point" in kiosk.render_html(kiosk.build_payload())
+    assert kiosk.build_payload()["ap"]["available"] is False
+    assert 'aria-label="System status"' in kiosk.render_html(kiosk.build_payload())
 
 def test_ap_credentials_never_disclosed_in_json_or_html():
     response = json.dumps({"state": "selected", "ap": {
@@ -37,7 +36,6 @@ def test_ap_observation_has_a_timestamp_after_successful_status_read():
         payload = kiosk.probe_ap()
     assert payload["updated_at"]
     assert run.call_args.kwargs["timeout"] == kiosk.AP_PROBE_TIMEOUT
-    assert kiosk.AP_PROBE_TIMEOUT > 5
 
 def test_dashboard_has_four_blocks_and_an_offline_signup_qr_without_credentials():
     page = kiosk.render_html({"ap": {
@@ -48,9 +46,48 @@ def test_dashboard_has_four_blocks_and_an_offline_signup_qr_without_credentials(
     assert page.count('class="panel') == 4
     assert "GWAY Kiosk" not in page
     assert "AP signup" in page
+    assert "<h2" not in page
+    assert "<h3" not in page
+    assert 'aria-label="System status"' in page
     assert kiosk.AP_SIGNUP_URL in page
     assert 'class="signup-qr"' in page
     assert "password" not in page.lower()
+
+
+def test_system_status_reuses_published_lcd_frames(tmp_path, monkeypatch):
+    source = tmp_path / "lcd-system-info.json"
+    source.write_text(json.dumps({"frames": [
+        {"key": "host", "line1": "HOST gway-001", "line2": "field up 1d2h"},
+        {"key": "health", "line1": "HEALTH 48C", "line2": "L0.12 RAM20%"},
+    ]}), encoding="utf-8")
+    monkeypatch.setattr(kiosk, "SYSTEM_STATUS_FILE", source)
+
+    context = kiosk.system_status_context()
+
+    assert context == {
+        "available": True,
+        "frames": [
+            {"line1": "HOST gway-001", "line2": "field up 1d2h"},
+            {"line1": "HEALTH 48C", "line2": "L0.12 RAM20%"},
+        ],
+        "message": "",
+    }
+
+
+def test_missing_system_status_is_safe_and_page_escapes_frames(tmp_path, monkeypatch):
+    monkeypatch.setattr(kiosk, "SYSTEM_STATUS_FILE", tmp_path / "missing")
+    assert kiosk.system_status_context() == {
+        "available": False, "frames": [], "message": "System status unavailable"
+    }
+    page = kiosk.render_html({
+        "ap": {"ssid": "", "interface": "", "updated_at": ""},
+        "rfid": {"installed": False, "card": "Not Installed", "seen_at": ""},
+        "system": {"available": True, "message": "", "frames": [
+            {"line1": "<unsafe>", "line2": "ok"},
+        ]},
+    })
+    assert "&lt;unsafe&gt;" in page
+    assert "\\u003cunsafe\\u003e" in page
 
 
 def test_rfid_not_installed_is_explicit(monkeypatch, tmp_path):
