@@ -20,6 +20,8 @@ key_present() {
 run_systemctl() {
   if [[ ${EUID} -eq 0 ]]; then
     systemctl "$@"
+  elif [[ "${KIOSK_MODE_SYSTEMCTL_DIRECT:-0}" == "1" ]]; then
+    systemctl "$@"
   else
     sudo -n systemctl "$@"
   fi
