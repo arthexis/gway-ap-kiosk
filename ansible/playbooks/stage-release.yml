@@ -1,0 +1,196 @@
+---
+# Increment 1: stage the app payload only. No activation, systemd, network or state changes.
+- name: Stage immutable AP Kiosk application release
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    kiosk_source: "{{ playbook_dir }}/../.."
+    kiosk_stage_root: /opt/gway-ap-kiosk
+    kiosk_stage_files:
+      - { src: "kiosk/bin/gway-kiosk-status", dest: "bin/gway-kiosk-status" }
+      - { src: "kiosk/bin/kiosk-mode", dest: "bin/kiosk-mode" }
+      - { src: "kiosk/sbin/gway-hdmi-kiosk-session", dest: "sbin/gway-hdmi-kiosk-session" }
+      - { src: "kiosk/sbin/gway-hdmi-kiosk-layout", dest: "sbin/gway-hdmi-kiosk-layout" }
+      - { src: "kiosk/libexec/gway-boot-stagger-until", dest: "libexec/gway-boot-stagger-until" }
+      - { src: "scripts/ap/kiosk-ap", dest: "sbin/kiosk-ap" }
+  tasks:
+    - name: Require non-root deployment operator and canonical stage destination
+      ansible.builtin.assert:
+        that:
+          - lookup('pipe', 'id -u') | int != 0
+          - kiosk_stage_root == '/opt/gway-ap-kiosk'
+        fail_msg: Immutable staging must run as the operator against /opt/gway-ap-kiosk.
+
+    - name: Resolve exact source revision
+      ansible.builtin.command:
+        argv: [git, -C, "{{ kiosk_source }}", rev-parse, --verify, HEAD]
+      register: kiosk_stage_revision
+      changed_when: false
+
+    - name: Verify SHA shape
+      ansible.builtin.assert:
+        that: kiosk_stage_revision.stdout is match('^[a-f0-9]{40}$')
+
+    - name: Reject modified application payload before SHA-based staging
+      ansible.builtin.command:
+        argv:
+          - git
+          - -C
+          - "{{ kiosk_source }}"
+          - diff
+          - --quiet
+          - HEAD
+          - --
+          - kiosk/bin
+          - kiosk/sbin
+          - kiosk/libexec
+          - scripts/ap/kiosk-ap
+      changed_when: false
+
+    - name: Set immutable paths
+      ansible.builtin.set_fact:
+        kiosk_stage_releases: "{{ kiosk_stage_root }}/releases"
+        kiosk_stage_target: "{{ kiosk_stage_root }}/releases/{{ kiosk_stage_revision.stdout }}"
+
+    - name: Check release root and parent for unsafe symlinks
+      become: true
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - "{{ kiosk_stage_root }}"
+        - "{{ kiosk_stage_root }}/releases"
+      register: kiosk_stage_ancestors
+
+    - name: Refuse symlinked or non-directory stage ancestors
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists or
+            ((item.stat.isdir | default(false)) and not (item.stat.islnk | default(false)))
+      loop: "{{ kiosk_stage_ancestors.results }}"
+
+    - name: Ensure release parent is a real directory
+      become: true
+      ansible.builtin.file:
+        path: "{{ kiosk_stage_releases }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+        follow: false
+
+    - name: Inspect existing release without following a link
+      become: true
+      ansible.builtin.stat:
+        path: "{{ kiosk_stage_target }}"
+        follow: false
+      register: kiosk_existing_release
+
+    - name: Reject existing non-directory release entry
+      ansible.builtin.assert:
+        that:
+          - not kiosk_existing_release.stat.exists or
+            ((kiosk_existing_release.stat.isdir | default(false)) and
+             not (kiosk_existing_release.stat.islnk | default(false)))
+        fail_msg: Unexpected release path; refusing to adopt.
+
+    - name: Create staging directory for a new revision
+      become: true
+      ansible.builtin.tempfile:
+        state: directory
+        path: "{{ kiosk_stage_releases }}"
+        prefix: ".staging-"
+      register: kiosk_staging
+      when: not kiosk_existing_release.stat.exists
+
+    - name: Stage and verify the new payload
+      when: not kiosk_existing_release.stat.exists
+      block:
+        - name: Prepare staging subdirectories
+          become: true
+          ansible.builtin.file:
+            path: "{{ kiosk_staging.path }}/{{ item }}"
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+          loop: [bin, sbin, libexec]
+
+        - name: Copy application executables into staging only
+          become: true
+          ansible.builtin.copy:
+            src: "{{ kiosk_source }}/{{ item.src }}"
+            dest: "{{ kiosk_staging.path }}/{{ item.dest }}"
+            owner: root
+            group: root
+            mode: '0755'
+          loop: "{{ kiosk_stage_files }}"
+
+        - name: Write revision marker into stage
+          become: true
+          ansible.builtin.copy:
+            dest: "{{ kiosk_staging.path }}/REVISION"
+            content: "{{ kiosk_stage_revision.stdout }}\n"
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Verify source and staged checksums
+          become: true
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/python3
+              - -c
+              - |
+                import hashlib, pathlib, sys
+                source, installed = (pathlib.Path(v) for v in sys.argv[1:])
+                assert source.is_file() and installed.is_file()
+                assert hashlib.sha256(source.read_bytes()).digest() == hashlib.sha256(installed.read_bytes()).digest()
+              - "{{ kiosk_source }}/{{ item.src }}"
+              - "{{ kiosk_staging.path }}/{{ item.dest }}"
+          changed_when: false
+          loop: "{{ kiosk_stage_files }}"
+
+        - name: Publish verified immutable release (no activation)
+          become: true
+          ansible.builtin.command:
+            argv: [mv, -T, --, "{{ kiosk_staging.path }}", "{{ kiosk_stage_target }}"]
+          changed_when: true
+      always:
+        - name: Remove leftover unpublished staging directory
+          become: true
+          ansible.builtin.file:
+            path: "{{ kiosk_staging.path }}"
+            state: absent
+          when: kiosk_staging.path is defined
+
+    - name: Verify existing or newly published release content against source
+      become: true
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - |
+            import hashlib, pathlib, sys
+            source, installed = (pathlib.Path(v) for v in sys.argv[1:])
+            assert source.is_file() and installed.is_file()
+            assert hashlib.sha256(source.read_bytes()).digest() == hashlib.sha256(installed.read_bytes()).digest()
+          - "{{ kiosk_source }}/{{ item.src }}"
+          - "{{ kiosk_stage_target }}/{{ item.dest }}"
+      changed_when: false
+      loop: "{{ kiosk_stage_files }}"
+
+    - name: Validate release revision marker
+      become: true
+      ansible.builtin.slurp:
+        src: "{{ kiosk_stage_target }}/REVISION"
+      register: kiosk_staged_revision
+
+    - name: Reject stale or incomplete staged revisions
+      ansible.builtin.assert:
+        that: (kiosk_staged_revision.content | b64decode | trim) == kiosk_stage_revision.stdout
+
+    - name: Report staging without switching active executables
+      ansible.builtin.debug:
+        msg: "Verified staged release {{ kiosk_stage_target }} (NOT ACTIVATED)"

@@ -20,9 +20,11 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install pytest ansible-core
       - name: Run AP and kiosk regression tests
-        run: python -m pytest -q --durations=0 --durations-min=0.001 tests/test_kiosk_ap_reset.py tests/test_kiosk_independence.py tests/test_kiosk_ap_discovery.py tests/test_ap_portal_server.py tests/test_kiosk_ap_security.py tests/test_ansible_install_contract.py
+        run: python -m pytest -q --durations=0 --durations-min=0.001 tests/test_kiosk_ap_reset.py tests/test_kiosk_independence.py tests/test_kiosk_ap_discovery.py tests/test_ap_portal_server.py tests/test_kiosk_ap_security.py tests/test_ansible_install_contract.py tests/test_immutable_stage_contract.py
       - name: Ansible syntax
-        run: ansible-playbook --syntax-check -i localhost, ansible/playbooks/install.yml
+        run: |
+          ansible-playbook --syntax-check -i localhost, ansible/playbooks/install.yml
+          ansible-playbook --syntax-check -i localhost, ansible/playbooks/stage-release.yml
       - name: Shell syntax
         run: bash -n deploy.sh
   ansible-deploy:
