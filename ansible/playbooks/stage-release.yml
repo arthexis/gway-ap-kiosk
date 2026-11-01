@@ -32,10 +32,43 @@
       ansible.builtin.assert:
         that: kiosk_stage_revision.stdout is match('^[a-f0-9]{40}$')
 
+    - name: Reject modified application payload before SHA-based staging
+      ansible.builtin.command:
+        argv:
+          - git
+          - -C
+          - "{{ kiosk_source }}"
+          - diff
+          - --quiet
+          - HEAD
+          - --
+          - kiosk/bin
+          - kiosk/sbin
+          - kiosk/libexec
+          - scripts/ap/kiosk-ap
+      changed_when: false
+
     - name: Set immutable paths
       ansible.builtin.set_fact:
         kiosk_stage_releases: "{{ kiosk_stage_root }}/releases"
         kiosk_stage_target: "{{ kiosk_stage_root }}/releases/{{ kiosk_stage_revision.stdout }}"
+
+    - name: Check release root and parent for unsafe symlinks
+      become: true
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - "{{ kiosk_stage_root }}"
+        - "{{ kiosk_stage_root }}/releases"
+      register: kiosk_stage_ancestors
+
+    - name: Refuse symlinked or non-directory stage ancestors
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists or
+            ((item.stat.isdir | default(false)) and not (item.stat.islnk | default(false)))
+      loop: "{{ kiosk_stage_ancestors.results }}"
 
     - name: Ensure release parent is a real directory
       become: true
