@@ -27,3 +27,25 @@ python3 -m pytest -q tests
 ```
 
 Credential disclosure and rotation require explicit privileges. The status HTTP endpoint must never expose AP credentials.
+
+## Immutable deployment migration — increment 1 (staging only)
+
+Prepare a verified immutable application payload without changing the active AP,
+kiosk service executables, systemd units, sudoers, Polkit rules, user files,
+network configuration, or persistent data:
+
+```sh
+./deploy.sh --stage-release
+```
+
+This requires the non-root operator and Ansible privilege escalation for
+root-owned `/opt/gway-ap-kiosk/releases/<full-git-SHA>`. It stages six
+application executables, checks staged/source SHA-256 digests, validates
+the revision marker, and leaves the existing `/usr/local` executables
+untouched. Repeating against the same clean source revision verifies the
+existing immutable release rather than modifying it.
+
+The normal `./deploy.sh` installation remains unchanged in increment 1.
+**Do not run `--prune --apply` for AP Kiosk yet**; release activation,
+rollback, and retention follow in separately reviewed increments. A staged
+revision is not proof of an activated or healthy revision.
