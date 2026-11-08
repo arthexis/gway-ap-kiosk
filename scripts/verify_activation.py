@@ -2,6 +2,8 @@
 """Read-only AP Kiosk activation evidence; fail closed on missing provenance."""
 import hashlib
 import json
+import os
+import stat
 from pathlib import Path
 import re
 import subprocess
@@ -23,24 +25,40 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).digest()
 
 
+def trusted(path, *, directory=False):
+    """Reject symlinks, untrusted owners and group/world writable evidence."""
+    info = path.lstat()
+    expected = stat.S_ISDIR if directory else stat.S_ISREG
+    return expected(info.st_mode) and info.st_uid == 0 and not info.st_mode & 0o022
+
+
+def process_start(pid):
+    """Kernel process start ticks, used as stable identity across observations."""
+    raw = (Path('/proc') / str(pid) / 'stat').read_text()
+    return int(raw.rsplit(') ', 1)[1].split()[19])
+
+
 def verify(marker, releases, installed, *, pid, cmdline, started_at):
     """Only immutable staged bytes matching installed executables prove provenance."""
     try:
+        if not trusted(marker) or not trusted(releases, directory=True):
+            return False
         revision = marker.read_text(encoding="ascii").strip()
         if not SHA.fullmatch(revision) or pid <= 0:
             return False
         release = releases / revision
-        if release.is_symlink() or not release.is_dir():
+        if not trusted(release, directory=True):
             return False
         revfile = release / "REVISION"
-        if revfile.is_symlink() or revfile.read_text(encoding="ascii").strip() != revision:
+        if not trusted(revfile) or revfile.read_text(encoding="ascii").strip() != revision:
             return False
-        if b"/usr/local/bin/gway-kiosk-status" not in cmdline.split(b"\0"):
+        argv = [part for part in cmdline.split(b"\0") if part]
+        if len(argv) < 2 or argv[1] != b"/usr/local/bin/gway-kiosk-status":
             return False
         for relative, target in FILES.items():
             source = release / relative
             dest = installed / target.lstrip("/")
-            if source.is_symlink() or dest.is_symlink() or not source.is_file() or not dest.is_file():
+            if not trusted(source) or not trusted(dest):
                 return False
             if digest(source) != digest(dest) or dest.stat().st_mtime > started_at:
                 return False
@@ -58,14 +76,15 @@ def main():
         if pid <= 0:
             raise ValueError("no active process")
         cmdline = (Path("/proc") / str(pid) / "cmdline").read_bytes()
-        stat = (Path("/proc") / str(pid) / "stat").read_text().rsplit(") ", 1)[1].split()
-        start_ticks = int(stat[19])
-        hz = __import__("os").sysconf("SC_CLK_TCK")
+        start_ticks = process_start(pid)
+        hz = os.sysconf("SC_CLK_TCK")
         uptime = float(Path("/proc/uptime").read_text().split()[0])
         started_at = time.time() - uptime + start_ticks / hz
         valid = verify(Path("/var/lib/gway-ap-kiosk/installed-revision"),
                        Path("/opt/gway-ap-kiosk/releases"), Path("/"),
                        pid=pid, cmdline=cmdline, started_at=started_at)
+        # A recycled PID or replaced process invalidates the observation.
+        valid = valid and process_start(pid) == start_ticks and (Path("/proc") / str(pid) / "cmdline").read_bytes() == cmdline
     except (OSError, ValueError, subprocess.SubprocessError, IndexError):
         valid = False
     print(json.dumps({"activation_verified": valid}))
