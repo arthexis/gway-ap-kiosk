@@ -41,7 +41,8 @@ def process_start(pid):
 def verify(marker, releases, installed, *, pid, cmdline, started_at):
     """Only immutable staged bytes matching installed executables prove provenance."""
     try:
-        if not trusted(marker) or not trusted(releases, directory=True):
+        if not (trusted(marker) and trusted(releases, directory=True)
+                and trusted(releases.parent, directory=True)):
             return False
         revision = marker.read_text(encoding="ascii").strip()
         if not SHA.fullmatch(revision) or pid <= 0:
@@ -60,7 +61,12 @@ def verify(marker, releases, installed, *, pid, cmdline, started_at):
             dest = installed / target.lstrip("/")
             if not trusted(source) or not trusted(dest):
                 return False
-            if digest(source) != digest(dest) or dest.stat().st_mtime > started_at:
+            before_source, before_dest = source.stat(), dest.stat()
+            if digest(source) != digest(dest):
+                return False
+            after_source, after_dest = source.stat(), dest.stat()
+            if (before_source != after_source or before_dest != after_dest
+                    or after_dest.st_mtime > started_at):
                 return False
         return True
     except (OSError, UnicodeError, ValueError):
