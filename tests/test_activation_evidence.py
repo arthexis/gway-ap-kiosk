@@ -41,6 +41,24 @@ class ActivationEvidenceTests(unittest.TestCase):
         with mock.patch.object(verifier, 'trusted', side_effect=lambda p, directory=False: p.is_dir() if directory else p.is_file()):
             return verifier.verify(self.marker, self.releases, self.installed, **params)
 
+    def test_stage_playbook_repairs_existing_release_for_unprivileged_checker(self):
+        playbook = (MODULE.parents[1] / "ansible/playbooks/stage-release.yml").read_text()
+        task = playbook.split(
+            "    - name: Make published release traversable without operator write access\\n", 1
+        )[1].split("    - name:", 1)[0]
+        self.assertIn('path: "{{ kiosk_stage_target }}"', task)
+        self.assertIn("state: directory", task)
+        self.assertIn("owner: root", task)
+        self.assertIn("group: root", task)
+        self.assertIn("mode: '0755'", task)
+        self.assertIn("follow: false", task)
+        self.assertIn("become: true", task)
+        # Runs outside the new-release block, including for an existing 0700 release.
+        self.assertLess(playbook.index("    - name: Stage and verify the new payload"),
+                        playbook.index("    - name: Make published release traversable"))
+        self.assertLess(playbook.index("    - name: Make published release traversable"),
+                        playbook.index("    - name: Verify existing or newly published release"))
+
     def test_untrusted_evidence_fails_closed(self):
         self.assertFalse(verifier.verify(self.marker, self.releases, self.installed,
                                          pid=42, cmdline=COMMAND, started_at=9999999999.0))
