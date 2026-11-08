@@ -165,6 +165,16 @@
             state: absent
           when: kiosk_staging.path is defined
 
+    - name: Make published release traversable without operator write access
+      become: true
+      ansible.builtin.file:
+        path: "{{ kiosk_stage_target }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+        follow: false
+
     - name: Verify existing or newly published release content against source
       become: true
       ansible.builtin.command:
