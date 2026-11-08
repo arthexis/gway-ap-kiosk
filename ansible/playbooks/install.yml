@@ -77,6 +77,15 @@
         - { src: scripts/ap/kiosk-ap, dest: /usr/local/sbin/kiosk-ap }
       notify: Restart kiosk status
 
+    - name: Install read-only kiosk activation evidence checker
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/scripts/verify_activation.py"
+        dest: /usr/local/libexec/gway-kiosk-verify-activation
+        owner: root
+        group: root
+        mode: "0755"
+
     - name: Install restricted AP rotation sudoers policy
       become: true
       ansible.builtin.copy:
