@@ -3,6 +3,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 
 MODULE = Path(__file__).resolve().parents[1] / "scripts" / "verify_activation.py"
@@ -36,7 +37,13 @@ class ActivationEvidenceTests(unittest.TestCase):
     def check(self, **kwargs):
         params = dict(pid=42, cmdline=COMMAND, started_at=9999999999.0)
         params.update(kwargs)
-        return verifier.verify(self.marker, self.releases, self.installed, **params)
+        # Synthetic fixture files are owned by the CI user, not root.
+        with mock.patch.object(verifier, 'trusted', side_effect=lambda p, directory=False: p.is_dir() if directory else p.is_file()):
+            return verifier.verify(self.marker, self.releases, self.installed, **params)
+
+    def test_untrusted_evidence_fails_closed(self):
+        self.assertFalse(verifier.verify(self.marker, self.releases, self.installed,
+                                         pid=42, cmdline=COMMAND, started_at=9999999999.0))
 
     def test_valid_matching_staged_and_running(self):
         self.assertTrue(self.check())
