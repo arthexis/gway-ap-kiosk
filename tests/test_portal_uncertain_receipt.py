@@ -43,3 +43,27 @@ def test_missing_pending_marker_is_not_a_verified_recovery(tmp_path):
     assert report["uncertain"] is False
     assert report["operator_release_allowed"] is False
     assert all(value == "missing" for value in report["file_status"].values())
+
+
+def test_verified_offline_backup_never_authorizes_runtime_recovery(tmp_path):
+    import sys
+    sys.path.insert(0, str(SCRIPT.parent))
+    from portal_state_backup import create_snapshot
+    state = tmp_path / "state"
+    state.mkdir(mode=0o700)
+    marker = state / "authorization.pending"
+    marker.write_text("sensitive MAC aa:bb:cc:dd:ee:ff")
+    marker.chmod(0o600)
+    backup = tmp_path / "backup"
+    create_snapshot(state, backup)
+    report = mod.collect(state, snapshot=backup)
+    assert report["offline_snapshot_integrity_verified"] is True
+    assert report["offline_snapshot_pending_preserved"] is True
+    assert report["state_backup_verified"] is False
+    assert report["operator_release_allowed"] is False
+    assert marker.exists()
+    assert "aa:bb:cc:dd:ee:ff" not in json.dumps(report)
+    (backup/"authorization.pending").write_text("tampered")
+    with pytest.raises(ValueError, match="integrity"):
+        mod.collect(state, snapshot=backup)
+    assert marker.exists()
