@@ -1,0 +1,11 @@
+[Unit]
+Description=Check GWAY uplink connectivity each minute
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=gway-uplink-recovery.service
+
+[Install]
+WantedBy=timers.target

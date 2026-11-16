@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Select a working NetworkManager uplink without touching connected routes."""
+import json
+import logging
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+STATE = Path('/run/gway-uplink-recovery/state.json')
+PROTOCOL = '242'  # Locally reserved for this controller.
+METRIC = 5
+FAIL_SAMPLES = 3
+RECOVER_SAMPLES = 4
+URLS = ('https://1.1.1.1/cdn-cgi/trace', 'https://api.github.com/')
+LOG = logging.getLogger('gway-uplink-recovery')
+
+
+def command(args, timeout=12):
+    return subprocess.run(args, capture_output=True, text=True, timeout=timeout, check=False)
+
+
+def routes():
+    result = command(['ip', '-j', '-4', 'route', 'show', 'default'])
+    if result.returncode:
+        raise RuntimeError('route inventory unavailable')
+    owned = command(['ip', '-j', '-4', 'route', 'show', 'default', 'proto', PROTOCOL])
+    if owned.returncode:
+        raise RuntimeError('owned route inventory unavailable')
+    rows, own_rows = json.loads(result.stdout), json.loads(owned.stdout)
+    # iproute2 may omit the protocol field when filtering by that protocol.
+    def normalized(row):
+        return {key: value for key, value in row.items() if key != 'protocol'}
+    for row in rows:
+        row['_owned'] = any(normalized(row) == normalized(item) for item in own_rows)
+    return rows
+
+
+def candidates(rows):
+    found = {}
+    for row in rows:
+        iface, gateway = row.get('dev'), row.get('gateway')
+        if not iface or not gateway or row.get('_owned', False):
+            continue
+        # Only explicitly active NM Ethernet and Wi-Fi client profiles qualify.
+        result = command(['nmcli', '-g', 'GENERAL.TYPE,GENERAL.STATE,GENERAL.CONNECTION', 'device', 'show', iface])
+        fields = result.stdout.splitlines()
+        if result.returncode or len(fields) < 3 or fields[0] not in ('ethernet', 'wifi') or not fields[1].startswith('100 '):
+            continue
+        mode = command(['nmcli', '-g', '802-11-wireless.mode', 'connection', 'show', fields[2]]) if fields[0] == 'wifi' else None
+        if mode and (mode.returncode or mode.stdout.strip() != 'infrastructure'):
+            continue
+        # The gateway must not be a local address on any interface.
+        local = command(['ip', '-j', '-4', 'address', 'show'])
+        if local.returncode:
+            continue
+        addresses = {a['local'] for d in json.loads(local.stdout) for a in d.get('addr_info', []) if a.get('family') == 'inet'}
+        if gateway in addresses:
+            continue
+        metric = int(row.get('metric', 0))
+        current = found.get(iface)
+        if current is None or metric < current['metric']:
+            found[iface] = {'dev': iface, 'gateway': gateway, 'metric': metric}
+    return sorted(found.values(), key=lambda x: (x['metric'], x['dev']))
+
+
+def healthy(iface):
+    for url in URLS:
+        result = command(['curl', '--ipv4', '--silent', '--show-error', '--output', '/dev/null', '--write-out', '%{http_code}', '--max-time', '6', '--interface', iface, '--noproxy', '*', url], timeout=8)
+        if result.returncode == 0 and result.stdout.strip() in ('200', '204'):
+            return True
+    return False
+
+
+def load_state():
+    try:
+        data = json.loads(STATE.read_text())
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state):
+    STATE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = STATE.with_suffix('.tmp')
+    tmp.write_text(json.dumps(state) + '\n')
+    os.replace(tmp, STATE)
+
+
+def override(rows):
+    owned = [r for r in rows if r.get('_owned', False)]
+    if len(owned) > 1:
+        raise RuntimeError('ambiguous owned routes')
+    return owned[0] if owned else None
+
+
+def alter(verb, route):
+    result = command(['ip', '-4', 'route', verb, 'default', 'via', route['gateway'], 'dev', route['dev'], 'metric', str(METRIC), 'proto', PROTOCOL])
+    if result.returncode:
+        raise RuntimeError(f'route {verb} failed')
+
+
+def cycle():
+    rows = routes()
+    choices = candidates(rows)
+    owned = override(rows)
+    state = load_state()
+    if not choices:
+        LOG.warning('no eligible uplinks; leaving routes unchanged')
+        return
+    preferred = choices[0]
+    health = {c['dev']: healthy(c['dev']) for c in choices}
+    if owned:
+        # Recover preference only after sustained independently proven health.
+        if owned.get('dev') == preferred['dev']:
+            state['recovered'] = 0
+        elif health[preferred['dev']]:
+            state['recovered'] = state.get('recovered', 0) + 1
+            if state['recovered'] >= RECOVER_SAMPLES:
+                alter('del', owned)
+                state = {}
+                LOG.info('restored preferred uplink %s', preferred['dev'])
+        else:
+            state['recovered'] = 0
+            if not health.get(owned.get('dev'), False):
+                state['override_failed'] = state.get('override_failed', 0) + 1
+                alternatives = [c for c in choices if c['dev'] != owned.get('dev') and health[c['dev']]]
+                if state['override_failed'] >= FAIL_SAMPLES and alternatives:
+                    alter('replace', alternatives[0])
+                    state = {}
+                    LOG.warning('replaced failed alternate with uplink %s', alternatives[0]['dev'])
+            else:
+                state['override_failed'] = 0
+        save_state(state)
+        return
+    # Do not override a higher-priority non-owned default route.
+    if any(int(row.get('metric', 0)) <= METRIC for row in rows):
+        LOG.warning('higher-priority default route exists; leaving routes unchanged')
+        return
+    if health[preferred['dev']]:
+        state = {}
+    else:
+        state['failed'] = state.get('failed', 0) + 1
+        alternatives = [c for c in choices[1:] if health[c['dev']]]
+        if state['failed'] >= FAIL_SAMPLES and alternatives:
+            alter('add', alternatives[0])
+            state = {'recovered': 0}
+            LOG.warning('selected working alternate uplink %s', alternatives[0]['dev'])
+    save_state(state)
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, format='%(levelname)s %(message)s')
+    try:
+        cycle()
+        if Path('/sys/class/net/gway').exists():
+            result = command(['wg', 'show', 'gway', 'latest-handshakes'])
+            if result.returncode == 0:
+                timestamps = [int(line.split()[-1]) for line in result.stdout.splitlines() if len(line.split()) == 2]
+                if timestamps and max(timestamps) and time.time() - max(timestamps) < 180:
+                    LOG.info('WireGuard handshake recent')
+                else:
+                    LOG.warning('WireGuard handshake stale or unavailable')
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, RuntimeError) as exc:
+        LOG.error('uplink check failed: %s', type(exc).__name__)
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())
