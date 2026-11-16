@@ -302,3 +302,35 @@ is nonblocking and rejects an already held lock rather than waiting
 without a bound. Neither protection replaces exclusive runtime writer
 ownership. The pending marker is never removed by the backup or
 operator receipt tools.
+
+## Stage 7 — offline adversarial acceptance (no on-node execution)
+
+The two-set coordinator now intentionally exposes **no grant deletion or
+rollback API**. In particular, the former caller-provided
+`exclusive_lock=True` authorization was not a trustworthy proof of
+external writer exclusivity and has been removed. Any ambiguous nft grant
+must retain UNCERTAIN; operator recovery must preserve third-party grants.
+
+A private state snapshot now performs a second pass over the expected
+files **before publishing a valid manifest**. It rejects observed changes,
+including missing/added files and changed content across the capture.
+This is not a true atomic multi-file snapshot: a cooperating writer must
+be quiesced, and a hostile same-UID writer can defeat repeated observation.
+Do not infer a firewall backup or production recovery authorization.
+
+For offline acceptance only, the redacted receipt supports an optional
+`--offline-snapshot <private-snapshot-directory>`. When provided, integrity
+verification must succeed before it emits the receipt; the only added
+claims are `offline_snapshot_integrity_verified` and
+`offline_snapshot_pending_preserved`. Fields
+`state_backup_verified`, `firewall_verified`, and
+`operator_release_allowed` remain explicitly **false**. Neither snapshot
+verification nor receipt generation alters `authorization.pending`.
+
+The next runtime safety gates remain: provision and verify isolated
+`gwayap` identity, prove the obsolete and external writers are
+quiescent, inspect actual nft hooks and preserve independent grants,
+obtain protected offline backup plus separate firewall/state backups,
+validate private file ownership on the host, and independently review
+the UNCERTAIN release procedure. No runtime or physical acceptance
+is claimed by this Draft.
