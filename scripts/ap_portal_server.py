@@ -511,8 +511,25 @@ class PortalState:
             os.close(fd)
 
     def _coordinator(self):
-        from portal_firewall_coordinator import NftGrantCoordinator
-        return NftGrantCoordinator()
+        from portal_firewall_coordinator import CoordinationError, NftGrantCoordinator
+
+        class CheckedCoordinator:
+            def __init__(self):
+                self._nft = NftGrantCoordinator()
+
+            def add(self, macs):
+                try:
+                    return self._nft.add(macs)
+                except CoordinationError as exc:
+                    raise FirewallSyncError("coordinated firewall authorization failed") from exc
+
+            def snapshot(self):
+                try:
+                    return self._nft.snapshot()
+                except CoordinationError as exc:
+                    raise FirewallSyncError("coordinated firewall prerequisites missing") from exc
+
+        return CheckedCoordinator()
 
     def _subscribe_coordinated(self, *, record, mac_address, already_authorized,
                                trusted, ip_address, normalized_email, user_agent, host):
@@ -1116,7 +1133,10 @@ def main() -> int:
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
-    config = build_config(parse_args())
+    args = parse_args()
+    if args.coordinated_firewall and args.skip_firewall_sync:
+        raise ValueError("coordinated firewall cannot be disabled with --skip-firewall-sync")
+    config = build_config(args)
     app = PortalApplication(config)
     server = ThreadingHTTPServer((config.bind, config.port), app.handler_class())
     LOGGER.info("AP portal listening on %s:%s", config.bind, config.port)
