@@ -557,6 +557,7 @@ class PortalState:
             consent_position = self._consent_log_position()
             activity_position = self.config.activity_path.stat().st_size if self.config.activity_path.exists() else None
             intent.begin()
+            firewall_attempted = False
             try:
                 self._append_consent(record)
                 self.activity.record(
@@ -569,6 +570,7 @@ class PortalState:
                 if self.config.sync_firewall:
                     # Even a previously authorized device can be missing a grant
                     # after service restart; reconcile both sets additively.
+                    firewall_attempted = True
                     self._coordinator().add(next_authorized | self._trusted)
             except Exception as failure:
                 # A failed nft batch is atomic. If any compensation fails,
@@ -586,7 +588,11 @@ class PortalState:
                 if errors:
                     raise OSError("authorization compensation incomplete") from failure
                 self._sync_authorization_files()
-                intent.finish()
+                # A timeout/connection loss after the broker sent an nft batch
+                # is ambiguous: never clear uncertainty merely because files
+                # were compensated. The firewall might already contain a grant.
+                if not firewall_attempted:
+                    intent.finish()
                 raise
             intent.finish()
             self._authorized = next_authorized
