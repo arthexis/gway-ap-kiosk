@@ -208,3 +208,66 @@ consent/activity/authorization data as private files. This does not repair
 permissions of imported records: validate existing ownership and mode during
 migration and reject state with unsafe provenance. These service templates
 remain uninstalled and unactivated.
+
+## Stage 5 — dedicated identity and root-acknowledged single-writer cutover (not enabled)
+
+Before **candidate staging**, a separately approved, non-login `gwayap`
+service account must exist. The staging playbook fails closed if it cannot
+resolve that UID and does not create it. The portal candidate runs only
+under `gwayap`, not the shared `arthe` login. The broker is root-only and
+checks the kernel-reported UID *and* the persisted authorized/trusted
+allowlists in the fixed private `/var/lib/gway-ap-kiosk/portal` directory
+before adding grants. File ownership must match the dedicated UID, modes
+must disallow group/other access, and grant paths cannot be symlinks.
+A request for a MAC absent from durable state is refused; both nft sets
+remain additive and unrelated grants remain untouched.
+
+This is **not application authentication**. A compromised process with
+`gwayap` privileges could alter its own grant source. The security
+boundary therefore depends on dedicated account isolation, immutable
+root-owned installed code, controlled state writers and physical AP
+registration tests. Nothing provisions that isolation automatically.
+
+Broker startup now requires a separate root-owned, private
+`/etc/gway-ap-kiosk/portal-writer-cutover.json` with schema 1,
+`assertions` containing these exact boolean-true fields:
+
+- `legacy_portal_service_disabled`
+- `legacy_sync_path_disabled`
+- `legacy_sync_service_disabled`
+- `host_firewall_writer_quiesced`
+- `independent_grants_backed_up`
+- `dedicated_portal_uid_verified`
+- `uncertain_recovery_documented`
+
+The file must have root ownership, restrictive permissions and no
+symlink. It is a *record of operator attestations*, not independent proof
+that systemd units, nft base chains or unrelated writers are safe.
+Do not create this file based only on offline tests.
+
+### UNCERTAIN recovery receipt and backup evidence (manual, not automated)
+
+1. Keep portal and legacy sync **stopped** with the marker intact.
+   Confirm the management uplink before inspecting any runtime policies.
+2. Capture a private, mode-restricted backup of the exact state directory,
+   both relevant nft sets and full table/chain policy, Nginx site and
+   systemd units. Record filesystem permissions and a separate restoration
+   test in an approved maintenance window. Never put grants, consent logs,
+   emails or raw backup hashes into GitHub comments.
+3. Produce `portal_uncertain_receipt.py --state-dir <state>`; attach only
+   its sanitized JSON, showing UNKNOWN/UNVERIFIED gates explicitly.
+4. Under a *single verified writer*, compare the durable authorization
+   and consent records against both nft sets and the independent grants
+   inventory. Resolve whether the ambiguous grant was applied. Never
+   delete a grant merely because the compensated consent file lacks it.
+5. Obtain an independently reviewed resolution/rollback receipt including
+   exact revision, backed-up location (sanitized), quiesced writers,
+   retained foreign grants and service checks. Only a separately approved
+   recovery procedure may clear the pending marker; **this PR contains no
+   automatic marker-release command**.
+6. If any piece of evidence is missing, keep **UNCERTAIN** and do not
+   attempt portal restart, firewall flush or host deployment.
+
+No step above has been run against `gway-001`; the playbook still only
+stages unactivated files and neither the root contract nor dedicated
+service account is created by this PR.
