@@ -516,11 +516,13 @@ class PortalState:
     def _coordinator(self):
         from portal_firewall_coordinator import CoordinationError, NftGrantCoordinator
 
+        broker_socket = self.config.nft_broker_socket
+
         class CheckedCoordinator:
             def __init__(self):
-                if config.nft_broker_socket:
+                if broker_socket:
                     from portal_nft_client import BrokerClient
-                    self._nft = BrokerClient(config.nft_broker_socket)
+                    self._nft = BrokerClient(broker_socket)
                 else:
                     self._nft = NftGrantCoordinator()
 
