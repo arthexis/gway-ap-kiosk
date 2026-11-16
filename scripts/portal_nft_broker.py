@@ -40,10 +40,10 @@ def decode_request(data: bytes) -> set[str]:
         payload = json.loads(data[:-1].decode("utf-8"))
     except (UnicodeError, ValueError) as exc:
         raise BrokerRejected("invalid request") from exc
-    if not isinstance(payload, dict) or set(payload) != {"op", "macs"} or payload["op"] != "add":
+    if not isinstance(payload, dict) or set(payload) != {"op", "macs"} or payload["op"] not in {"add", "check"}:
         raise BrokerRejected("unsupported operation")
     values = payload["macs"]
-    if not isinstance(values, list) or not 1 <= len(values) <= MAX_MACS:
+    if not isinstance(values, list) or len(values) > MAX_MACS or (payload["op"] == "add" and not values) or (payload["op"] == "check" and values):
         raise BrokerRejected("invalid grant batch")
     if any(not isinstance(m, str) or not MAC.fullmatch(m) for m in values):
         raise BrokerRejected("invalid grant")
@@ -63,7 +63,9 @@ def serve_request(conn, *, uid: int, coordinator, lock_path: Path) -> None:
         message.extend(fragment)
         if b"\n" in fragment:
             break
-    macs = decode_request(bytes(message))
+    raw = bytes(message)
+    macs = decode_request(raw)
+    op = json.loads(raw)["op"]
     # Broker-controlled lock distinct from the portal's state-file lock:
     # does not deadlock with the portal holding its own lock over the RPC.
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -71,7 +73,10 @@ def serve_request(conn, *, uid: int, coordinator, lock_path: Path) -> None:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise BrokerRejected("invalid broker lock")
         fcntl.flock(fd, fcntl.LOCK_EX)
-        coordinator.add(macs)
+        if op == "check":
+            coordinator.snapshot()
+        else:
+            coordinator.add(macs)
     finally:
         os.close(fd)
     conn.sendall(b'{"ok":true}\n')
