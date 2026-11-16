@@ -45,11 +45,15 @@ def main() -> int:
     from portal_firewall_coordinator import CoordinationError
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-dir", type=Path, required=True)
+    parser.add_argument("--broker-socket", type=Path, required=True)
     args = parser.parse_args()
     if os.environ.get("GWAY_AP_CUTOVER_APPROVED") != "1":
         parser.error("coordinated cutover not approved; refusing legacy synchronization")
     try:
-        reconcile(args.state_dir)
+        from portal_nft_client import BrokerClient
+        from portal_grant_intent import GrantIntent
+        GrantIntent(args.state_dir).ensure_clean()
+        reconcile(args.state_dir, coordinator=BrokerClient(args.broker_socket))
     except (CoordinationError, OSError) as exc:
         # Never include MACs, consent records or command output in logs.
         parser.exit(1, "AP authorization reconciliation failed closed\n")
