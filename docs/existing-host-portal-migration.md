@@ -91,3 +91,33 @@ retired checkout. This is a **cutover blocker**: disable/replace the legacy
 writer only in a separately reviewed transactional activation with an
 exclusive writer lock, preserved independent grants and recovery proof.
 No new script should race the old path/service.
+
+## Stage 2 — opt-in integrated registration, still not activated
+
+The server now accepts `--coordinated-firewall`; this opt-in changes startup
+reconciliation and the consent-backed registration path to use additive
+two-set grants under `authorization.lock`. Consent and activity must be
+persisted before authorization-file changes and nft mutation. On a rejected
+nft batch, those writes are compensated; an interrupted process needs
+startup reconciliation to restore grants from durable consent/file state.
+Existing independent grants are never removed by this implementation.
+
+The legacy sync executable now refuses operation unless
+`GWAY_AP_CUTOVER_APPROVED=1`, and when enabled delegates to an additive
+reconciler using the same lock. **This environment variable alone is not a
+validated cutover**. Previously deployed binaries, path units and unrelated
+firewall writers do not necessarily honor this lock. The old service and
+path watcher must be inventoried and disabled during a reviewed activation.
+
+**Privilege gate:** the candidate unit runs as `arthe`; this alone does not
+grant the ability to modify nftables. Do **not** grant unrestricted
+CAP_NET_ADMIN or run the portal as root merely to make it work. A narrowly
+authorized firewall writer (or broker) must be specified, installed and
+tested, including authenticated requests, identity separation, and the same
+serialization lock, before enabling the candidate.
+
+**Residual crash limitations:** the records are currently append-only
+without explicit fsync/transaction journal. Startup reconciliation must not
+be treated as a full crash-consistency proof. Privilege separation,
+filesystem crash recovery, dedicated-host scope verification, concurrent
+unmanaged firewall writers, and physical client acceptance remain blocked.
