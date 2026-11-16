@@ -202,3 +202,9 @@ A separately approved recovery must establish effective grants and base
 chains, backup provenance, writer quiescence and verified consistency.
 Automatic marker removal or revocation of grants in an ambiguous state
 would risk removing an independent or already-committed authorization.
+
+The **candidate portal unit** now sets `UMask=0077` to create newly written
+consent/activity/authorization data as private files. This does not repair
+permissions of imported records: validate existing ownership and mode during
+migration and reject state with unsafe provenance. These service templates
+remain uninstalled and unactivated.
