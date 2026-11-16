@@ -16,8 +16,8 @@ from pathlib import Path
 
 from portal_firewall_coordinator import MAC, NftGrantCoordinator, CoordinationError
 
-MAX_REQUEST = 4096
-MAX_MACS = 64
+MAX_REQUEST = 32768
+MAX_MACS = 1024
 
 
 class BrokerRejected(RuntimeError):
@@ -27,14 +27,21 @@ class BrokerRejected(RuntimeError):
 def authorize_peer(conn, *, allowed_uid: int) -> None:
     if not hasattr(socket, "SO_PEERCRED"):
         raise BrokerRejected("peer credentials unsupported")
-    creds = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
-    _pid, uid, _gid = struct.unpack("3i", creds)
+    try:
+        creds = conn.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i"))
+        if len(creds) != struct.calcsize("3i"):
+            raise BrokerRejected("invalid peer credentials")
+        pid, uid, _gid = struct.unpack("3i", creds)
+    except (OSError, struct.error) as exc:
+        raise BrokerRejected("peer credentials unavailable") from exc
+    if pid <= 0: 
+        raise BrokerRejected("invalid peer process")
     if uid != allowed_uid or uid == 0:
         raise BrokerRejected("peer not permitted")
 
 
 def decode_request(data: bytes) -> set[str]:
-    if not data or len(data) > MAX_REQUEST or not data.endswith(b"\n"):
+    if not data or len(data) > MAX_REQUEST or data.count(b"\n") != 1 or not data.endswith(b"\n"):
         raise BrokerRejected("invalid request framing")
     try:
         payload = json.loads(data[:-1].decode("utf-8"))
@@ -56,14 +63,15 @@ def decode_request(data: bytes) -> set[str]:
 def serve_request(conn, *, uid: int, coordinator, lock_path: Path) -> None:
     authorize_peer(conn, allowed_uid=uid)
     message = bytearray()
+    # Read until clean EOF, not just the first newline: reject second frames
+    # and trailing bytes instead of silently processing the first command.
     while len(message) <= MAX_REQUEST:
         fragment = conn.recv(min(1024, MAX_REQUEST + 1 - len(message)))
         if not fragment:
             break
         message.extend(fragment)
-        if b"\n" in fragment:
-            break
-    raw = bytes(message)
+    if len(message) > MAX_REQUEST:
+        raise BrokerRejected("request exceeds maximum")
     macs = decode_request(raw)
     op = json.loads(raw)["op"]
     # Broker-controlled lock distinct from the portal's state-file lock:
