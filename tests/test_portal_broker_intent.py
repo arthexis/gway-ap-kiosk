@@ -91,3 +91,30 @@ def test_suspicious_symlink_marker_fails_closed(tmp_path):
     with pytest.raises(journal.RecoveryRequired):
         intent.finish()
     assert target.read_text() == "do-not-edit"
+
+
+def test_portal_refuses_startup_after_interrupted_grant(tmp_path):
+    portal = load("ap_portal_server")
+    directory = tmp_path / "state"
+    directory.mkdir()
+    journal.GrantIntent(directory).begin()
+    config = portal.PortalConfig(
+        bind="127.0.0.1", port=0, assets_dir=tmp_path,
+        state_dir=directory, authorized_macs_path=directory / "authorized_macs.txt",
+        trusted_macs_path=directory / "trusted_macs.txt",
+        consents_path=directory / "consents.jsonl",
+        activity_path=directory / "activity.jsonl",
+        source_url="", sync_firewall=True, coordinated_firewall=True)
+    with pytest.raises(journal.RecoveryRequired):
+        portal.PortalState(config)
+
+
+def test_broker_client_failure_is_closed(tmp_path):
+    client_mod = load("portal_nft_client")
+    client = client_mod.BrokerClient(tmp_path / "missing.sock")
+    with pytest.raises(client_mod.CoordinationError):
+        client.add({MAC})
+    with pytest.raises(client_mod.CoordinationError):
+        client.snapshot()
+    with pytest.raises(client_mod.CoordinationError):
+        client.add({"bad; flush ruleset"})
