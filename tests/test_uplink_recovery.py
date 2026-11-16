@@ -98,7 +98,8 @@ def test_failed_override_uses_another_proven_path(monkeypatch, tmp_path):
 def test_owned_routes_use_kernel_protocol_filter_not_displayed_name(monkeypatch):
     base = {'dev': 'eth0', 'metric': 5, 'gateway': '192.168.1.1', 'protocol': 'locally-named-protocol'}
     def cmd(args, timeout=12):
-        return subprocess.CompletedProcess(args, 0, json.dumps([base]), '')
+        row = {k: v for k, v in base.items() if k != 'protocol'} if 'proto' in args else base
+        return subprocess.CompletedProcess(args, 0, json.dumps([row]), '')
     monkeypatch.setattr(m, 'command', cmd)
     rows = m.routes()
     assert m.override(rows)['dev'] == 'eth0'

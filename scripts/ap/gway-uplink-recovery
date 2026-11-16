@@ -29,8 +29,11 @@ def routes():
     if owned.returncode:
         raise RuntimeError('owned route inventory unavailable')
     rows, own_rows = json.loads(result.stdout), json.loads(owned.stdout)
+    # iproute2 may omit the protocol field when filtering by that protocol.
+    def normalized(row):
+        return {key: value for key, value in row.items() if key != 'protocol'}
     for row in rows:
-        row['_owned'] = row in own_rows
+        row['_owned'] = any(normalized(row) == normalized(item) for item in own_rows)
     return rows
 
 
