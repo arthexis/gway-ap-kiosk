@@ -135,8 +135,13 @@ def restore_to_empty_sandbox(snapshot: Path, target: Path) -> dict:
     # Never accept arbitrary paths or symlinked parents as a restore target.
     # Only create a new sandbox directly under the system temporary directory.
     root = Path(tempfile.gettempdir()).resolve()
-    if target.parent != root or target.is_symlink() or target.exists():
-        raise BackupError("restore requires a new direct temporary sandbox")
+    parent = target.parent
+    resolved_parent = parent.resolve()
+    if (not resolved_parent.is_relative_to(root) or resolved_parent == root
+            or resolved_parent != parent or target.is_symlink() or target.exists()
+            or not parent.is_dir() or parent.stat().st_uid != os.getuid()
+            or parent.stat().st_mode & 0o022):
+        raise BackupError("restore requires a new private temporary sandbox")
     receipt = verify_snapshot(snapshot)
     target.mkdir(mode=0o700)
     fd = _directory(snapshot)
