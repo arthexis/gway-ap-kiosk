@@ -108,7 +108,7 @@ def create_snapshot(source: Path, destination: Path) -> dict:
         os.close(source_fd)
 
 
-def verify_snapshot(snapshot: Path) -> dict:
+def verify_snapshot(snapshot: Path, *, _verified_digests: dict | None = None) -> dict:
     fd = _directory(snapshot)
     try:
         raw = _read(fd, "manifest.json")
@@ -133,6 +133,10 @@ def verify_snapshot(snapshot: Path) -> dict:
                 raise BackupError("snapshot file missing or unexpected")
             if payload is not None and hashlib.sha256(payload).hexdigest() != expected:
                 raise BackupError("snapshot mismatch")
+        # Transfer the verified content identities to the sandbox copier.
+        # Never rely on a fresh, unauthenticated manifest read after this point.
+        if _verified_digests is not None:
+            _verified_digests.update(manifest["files"])
         return {"integrity_verified": True, "restore_approved": False,
                 "firewall_verified": False, "uncertain_marker_preserved":
                 manifest["files"]["authorization.pending"] is not None}
@@ -152,14 +156,20 @@ def restore_to_empty_sandbox(snapshot: Path, target: Path) -> dict:
             or not parent.is_dir() or parent.stat().st_uid != os.getuid()
             or parent.stat().st_mode & 0o022):
         raise BackupError("restore requires a new private temporary sandbox")
-    receipt = verify_snapshot(snapshot)
+    verified_digests = {}
+    receipt = verify_snapshot(snapshot, _verified_digests=verified_digests)
     target.mkdir(mode=0o700)
     fd = _directory(snapshot)
     out_fd = _directory(target)
     try:
         for name in FILES:
             payload = _read(fd, name)
+            expected = verified_digests[name]
+            if (payload is None) != (expected is None):
+                raise BackupError("snapshot changed between verification and restore")
             if payload is not None:
+                if hashlib.sha256(payload).hexdigest() != expected:
+                    raise BackupError("snapshot changed between verification and restore")
                 _write_new(out_fd, name, payload)
         os.fsync(out_fd)
     finally:
