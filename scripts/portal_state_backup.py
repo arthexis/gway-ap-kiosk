@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import stat
+import tempfile
 from pathlib import Path
 
 FILES = ("authorized_macs.txt", "trusted_macs.txt", "consents.jsonl",
@@ -131,8 +132,11 @@ def verify_snapshot(snapshot: Path) -> dict:
 
 def restore_to_empty_sandbox(snapshot: Path, target: Path) -> dict:
     """Dry-run restoration test only. Never targets a live AP state directory."""
-    if str(target).startswith(("/var/", "/etc/", "/run/", "/opt/", "/home/")):
-        raise BackupError("live restoration target forbidden")
+    # Never accept arbitrary paths or symlinked parents as a restore target.
+    # Only create a new sandbox directly under the system temporary directory.
+    root = Path(tempfile.gettempdir()).resolve()
+    if target.parent != root or target.is_symlink() or target.exists():
+        raise BackupError("restore requires a new direct temporary sandbox")
     receipt = verify_snapshot(snapshot)
     target.mkdir(mode=0o700)
     fd = _directory(snapshot)
