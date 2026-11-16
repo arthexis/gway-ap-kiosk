@@ -68,3 +68,20 @@ def test_legacy_wrapper_has_no_flush_and_requires_cutover():
         x for x in wrapper.splitlines() if not x.lstrip().startswith("#"))
     assert 'GWAY_AP_CUTOVER_APPROVED:-' in wrapper
     assert "portal_authorization_reconcile.py" in wrapper
+
+
+def test_reconcile_rejects_uncertain_transaction_and_symlink(tmp_path):
+    from portal_grant_intent import GrantIntent, RecoveryRequired
+    fake = Fake()
+    intent = GrantIntent(tmp_path)
+    intent.begin()
+    with pytest.raises(RecoveryRequired):
+        module.reconcile(tmp_path, coordinator=fake)
+    assert fake.calls == []
+    intent.finish()
+    target = tmp_path / "foreign"
+    target.write_text(MAC + "\n")
+    (tmp_path / "authorized_macs.txt").symlink_to(target)
+    with pytest.raises(Exception, match="unsafe"):
+        module.reconcile(tmp_path, coordinator=fake)
+    assert fake.calls == []
