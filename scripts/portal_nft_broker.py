@@ -90,6 +90,17 @@ def verify_persisted_grants(state_dir: Path, requested: set[str], *, uid: int) -
                     payload = reader.read(1024 * 1024 + 1)
                 if len(payload) > 1024 * 1024:
                     raise BrokerRejected("oversize private state")
+                after = os.fstat(fd)
+                try:
+                    entry = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                except OSError as exc:
+                    raise BrokerRejected("state changed during verification") from exc
+                def fingerprint(st):
+                    return (st.st_dev, st.st_ino, st.st_size,
+                            st.st_mtime_ns, st.st_ctime_ns)
+                if (fingerprint(info) != fingerprint(after)
+                        or fingerprint(after) != fingerprint(entry)):
+                    raise BrokerRejected("state changed during verification")
                 try:
                     return payload.decode("utf-8")
                 except UnicodeDecodeError as exc:
