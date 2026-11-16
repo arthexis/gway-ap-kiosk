@@ -8,4 +8,4 @@ if [[ "${GWAY_AP_CUTOVER_APPROVED:-}" != "1" ]]; then
 fi
 STATE_DIR="${STATE_DIR:-${GWAY_AP_STATE_DIR:-/var/lib/gway-ap-kiosk/portal}}"
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-exec /usr/bin/python3 "${here}/../portal_authorization_reconcile.py" --state-dir "${STATE_DIR}"
+exec /usr/bin/python3 "${here}/../portal_authorization_reconcile.py" --state-dir "${STATE_DIR}" --broker-socket /run/gway-ap-nft/broker.sock
