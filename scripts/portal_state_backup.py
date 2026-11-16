@@ -85,6 +85,16 @@ def create_snapshot(source: Path, destination: Path) -> dict:
                     continue
                 _write_new(dest_fd, name, data)
                 inventory[name] = hashlib.sha256(data).hexdigest()
+            # Detect changes across the read window before publishing any
+            # valid manifest. This is an observed-stability check, NOT a
+            # transactional snapshot of independently written state files.
+            for name in FILES:
+                latest = _read(source_fd, name)
+                expected = inventory[name]
+                if (latest is None) != (expected is None):
+                    raise BackupError("source changed during snapshot")
+                if latest is not None and hashlib.sha256(latest).hexdigest() != expected:
+                    raise BackupError("source changed during snapshot")
             manifest = {"schema": 1, "files": inventory,
                         "restore_approved": False,
                         "firewall_verified": False}
