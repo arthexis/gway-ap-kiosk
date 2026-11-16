@@ -111,3 +111,27 @@ def test_startup_requires_coordinator_snapshot_even_without_grants(tmp_path, mon
         source_url="", sync_firewall=True, coordinated_firewall=True)
     with pytest.raises(portal.FirewallSyncError):
         portal.PortalState(config)
+
+
+def test_ambiguous_broker_response_preserves_uncertainty(tmp_path, monkeypatch):
+    state, events = state_for(tmp_path, monkeypatch, failed=True)
+    with pytest.raises(portal.FirewallSyncError):
+        submit(state)
+    assert (state.config.state_dir / "authorization.pending").is_file()
+    # Files are compensated, but a lost reply does not establish that nft
+    # did not apply the grant. Restart must fail closed.
+    assert not state.config.authorized_macs_path.exists()
+    assert not state.config.consents_path.exists()
+    with pytest.raises(Exception, match="uncertain"):
+        submit(state)
+    assert [item[0] for item in events].count("firewall") == 1
+
+
+def test_pre_broker_write_failure_can_clear_intent(tmp_path, monkeypatch):
+    state, _events = state_for(tmp_path, monkeypatch)
+    def fail(_):
+        raise OSError("synthetic consent I/O failure")
+    monkeypatch.setattr(state, "_append_consent", fail)
+    with pytest.raises(OSError):
+        submit(state)
+    assert not (state.config.state_dir / "authorization.pending").exists()
