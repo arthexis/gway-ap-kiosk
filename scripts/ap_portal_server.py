@@ -565,6 +565,7 @@ class PortalState:
                     trusted_device=trusted, user_agent=user_agent, host=host)
                 if not already_authorized:
                     self._write_authorized_macs(next_authorized)
+                self._sync_authorization_files()
                 if self.config.sync_firewall:
                     # Even a previously authorized device can be missing a grant
                     # after service restart; reconcile both sets additively.
@@ -584,6 +585,7 @@ class PortalState:
                         errors.append(exc)
                 if errors:
                     raise OSError("authorization compensation incomplete") from failure
+                self._sync_authorization_files()
                 intent.finish()
                 raise
             intent.finish()
@@ -596,6 +598,24 @@ class PortalState:
                 "monitoring_notice": MONITORING_NOTICE,
                 "source_code_url": self.config.source_url,
             }
+
+    def _sync_authorization_files(self) -> None:
+        # Under the state lock. Ensure payloads are durable before the broker
+        # can grant, and compensation is durable before clearing uncertainty.
+        for path in (self.config.consents_path, self.config.activity_path,
+                     self.config.authorized_macs_path):
+            if path.exists():
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+        directory_fd = os.open(self.config.state_dir,
+                               os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     def _restore_activity_log(self, position: int | None) -> None:
         path = self.config.activity_path
