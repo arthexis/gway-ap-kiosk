@@ -61,40 +61,59 @@ def decode_request(data: bytes) -> set[str]:
 
 
 def verify_persisted_grants(state_dir: Path, requested: set[str], *, uid: int) -> None:
-    """Authorize only MACs already durable in the dedicated portal state.
+    """Match grants to a pinned, private state-directory descriptor.
 
-    This is a provenance check, not proof that the caller is the portal app.
-    Caller must not supply the directory path. Dedicated UID provisioning,
-    private files and exclusive writer cutover remain mandatory.
+    This verifies persisted records, not application identity. Dedicated UID
+    and full single-writer cutover remain required.
     """
-    from portal_authorization_reconcile import load_macs
-    if state_dir.is_symlink() or not state_dir.is_dir():
-        raise BrokerRejected("state directory unavailable")
-    directory = state_dir.stat()
-    if directory.st_uid != uid or directory.st_mode & 0o077:
-        raise BrokerRejected("unsafe state directory ownership")
-    from portal_grant_intent import GrantIntent
-    # An in-progress portal grant carries a durable pending marker.
-    # Do NOT require its absence; doing so would deadlock legitimate grants.
-    pending = GrantIntent(state_dir).path
-    if pending.is_symlink():
-        raise BrokerRejected("unsafe pending marker")
-    if pending.exists():
-        st = pending.stat()
-        if not stat.S_ISREG(st.st_mode) or st.st_uid != uid or st.st_mode & 0o077:
-            raise BrokerRejected("unsafe pending marker")
-    allowed = set()
-    for name in ("authorized_macs.txt", "trusted_macs.txt"):
-        path = state_dir / name
-        if path.is_symlink():
-            raise BrokerRejected("unsafe grant file")
-        if path.exists():
-            st = path.stat()
-            if not stat.S_ISREG(st.st_mode) or st.st_uid != uid or st.st_mode & 0o077:
-                raise BrokerRejected("unsafe grant file")
-        allowed.update(load_macs(path))
-    if not requested <= allowed:
-        raise BrokerRejected("requested MAC lacks persisted authorization")
+    try:
+        directory_fd = os.open(state_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise BrokerRejected("unsafe state directory") from exc
+    try:
+        directory_stat = os.fstat(directory_fd)
+        if directory_stat.st_uid != uid or directory_stat.st_mode & 0o077:
+            raise BrokerRejected("unsafe state directory ownership")
+
+        def read_private(name: str, *, marker: bool = False) -> str | None:
+            try:
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory_fd)
+            except FileNotFoundError:
+                return None
+            except OSError as exc:
+                raise BrokerRejected("unsafe pending marker" if marker else "unsafe grant file") from exc
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != uid or info.st_mode & 0o077:
+                    raise BrokerRejected("unsafe pending marker" if marker else "unsafe grant file")
+                with os.fdopen(fd, "rb", closefd=False) as reader:
+                    payload = reader.read(1024 * 1024 + 1)
+                if len(payload) > 1024 * 1024:
+                    raise BrokerRejected("oversize private state")
+                try:
+                    return payload.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise BrokerRejected("invalid state encoding") from exc
+            finally:
+                os.close(fd)
+
+        read_private("authorization.pending", marker=True)
+        allowed = set()
+        for name in ("authorized_macs.txt", "trusted_macs.txt"):
+            data = read_private(name)
+            if data is None:
+                continue
+            for line in data.splitlines():
+                token = line.split("#", 1)[0].strip().split()
+                if not token:
+                    continue
+                if not MAC.fullmatch(token[0]):
+                    raise BrokerRejected("invalid state grant")
+                allowed.add(token[0].lower())
+        if not requested <= allowed:
+            raise BrokerRejected("requested MAC lacks persisted authorization")
+    finally:
+        os.close(directory_fd)
 
 
 def serve_request(conn, *, uid: int, coordinator, lock_path: Path, state_dir: Path | None = None) -> None:
