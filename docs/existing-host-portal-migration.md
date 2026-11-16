@@ -160,3 +160,45 @@ request), establish a trusted manual UNCERTAIN recovery receipt, migrate
 existing state with verified ownership, and physically test AP clients.
 **Do not stage on gway-001 or activate either candidate under issue #31
 without a separate approved rollout.**
+
+## Stage 4 — broker audit, bounded batches and UNCERTAIN receipt
+
+The broker's AF_UNIX `SO_PEERCRED` checks the kernel-reported peer PID
+and exact non-root UID; it does **not** authenticate the application binary,
+its systemd unit, or a consent event. Any process running under that same
+UID and able to connect to the socket can request grants. This remains a
+**security blocker** until the service identity/socket authorization
+boundary and the ownership of MAC provenance are reviewed. The root broker
+must not be installed on a shared UID on the assumption that `SO_PEERCRED`
+alone provides per-application authorization.
+
+Protocol framing now requires a single complete JSON request and a
+client half-close; trailing bytes, second frames, malformed credentials,
+unknown operations and unsupported set names are rejected. One additive
+nft transaction accepts at most **1024 distinct MACs**, with a maximum
+32768-byte request, to support migration inventories larger than 64 without
+partial batch commits. Inventories above those bounds are **not** split
+implicitly: fail closed and require a reviewed alternative.
+
+The shared state lock serializes cooperative portal/helper writes; the
+root broker lock serializes broker requests. Neither lock protects against
+unmodified host firewall services or other external nft writers. Preserve
+all separately managed grants; never flush host_security.
+
+After an ambiguous broker request (timeout, rejected reply, or lost
+acknowledgment), the portal now **retains** `authorization.pending` even
+when its file compensation succeeds. The server and reconciler refuse
+automatic restart with that marker. An operator can obtain a sanitized,
+read-only receipt using:
+
+```sh
+python3 scripts/portal_uncertain_receipt.py --state-dir /var/lib/gway-ap-kiosk/portal
+```
+
+The receipt includes only file presence/type/privacy status and explicit
+unverified gates; it does not reveal MACs, email addresses, consent contents,
+counts or hashes. It **cannot** clear the marker or certify the firewall.
+A separately approved recovery must establish effective grants and base
+chains, backup provenance, writer quiescence and verified consistency.
+Automatic marker removal or revocation of grants in an ambiguous state
+would risk removing an independent or already-committed authorization.
