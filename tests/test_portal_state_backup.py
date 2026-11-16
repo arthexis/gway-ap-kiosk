@@ -60,7 +60,7 @@ def test_no_overwrite_no_live_restore_and_no_release(tmp_path):
     mod.create_snapshot(original, backup)
     with pytest.raises(FileExistsError):
         mod.create_snapshot(original, backup)
-    with pytest.raises(mod.BackupError, match="live"):
+    with pytest.raises(mod.BackupError, match="private temporary sandbox"):
         mod.restore_to_empty_sandbox(backup, Path("/var/lib/gway-ap-kiosk/portal"))
     assert (original/"authorization.pending").exists()
 
