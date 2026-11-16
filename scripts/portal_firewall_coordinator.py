@@ -52,8 +52,8 @@ class NftGrantCoordinator:
     """Coordinated additive grants; caller must serialize other writers.
 
     A single nft -f transaction ensures neither set is partially updated
-    by a failed batch. Rollback only removes grants absent in the snapshot.
-    Host-firewall foreign grants are never flushed or replaced.
+    by a failed batch. No deletion API is exposed: foreign grants must
+    never be flushed, replaced or revoked by portal failure recovery.
     """
     def __init__(self, *, run=_run):
         self.run = run
@@ -81,21 +81,3 @@ class NftGrantCoordinator:
             self.run(["nft", "-f", "-"], input="\n".join(commands) + "\n")
         return delta
 
-    def rollback(self, delta, *, exclusive_lock=False):
-        # A concurrent independent writer may have adopted a newly-added grant.
-        # Never remove it unless the caller proves exclusive ownership.
-        if not exclusive_lock:
-            raise CoordinationError("rollback requires exclusive firewall writer lock")
-        if set(delta) != set(SETS):
-            raise CoordinationError("incomplete rollback snapshot")
-        commands = []
-        for table, name in SETS:
-            values = delta[(table, name)]
-            if any(not MAC.fullmatch(m) for m in values):
-                raise CoordinationError("invalid rollback entry")
-            if values:
-                commands.append(f"delete element inet {table} {name} {{ {', '.join(sorted(values))} }}")
-        # Validate both prerequisites again before a change; missing table fails closed.
-        self.snapshot()
-        if commands:
-            self.run(["nft", "-f", "-"], input="\n".join(commands) + "\n")
