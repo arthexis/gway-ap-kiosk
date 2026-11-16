@@ -155,7 +155,7 @@ def test_busy_broker_lock_refuses_firewall_write(tmp_path, monkeypatch):
             return struct.pack("3i", 42, 12345, 42)
         def recv(self, size):
             self.reads += 1
-            return (json.dumps({"op": "add", "macs": [MAC]}).encode() + b"\\n") if self.reads == 1 else b""
+            return (json.dumps({"op": "add", "macs": [MAC]}).encode() + b"\n") if self.reads == 1 else b""
         def sendall(self, data):
             raise AssertionError("busy lock must not acknowledge success")
     class Coordinator:
