@@ -148,7 +148,10 @@ def serve_request(conn, *, uid: int, coordinator, lock_path: Path, state_dir: Pa
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise BrokerRejected("invalid broker lock")
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise BrokerRejected("another authorized firewall writer is active") from exc
         if op == "check":
             coordinator.snapshot()
         else:
