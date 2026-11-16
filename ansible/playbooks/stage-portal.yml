@@ -1,0 +1,75 @@
+---
+# Stages a supported portal runtime. Deliberately does NOT install/enable
+# systemd or Nginx, migrate state, touch nftables or change active AP services.
+- name: Stage GWAY AP portal candidate for reviewed existing-host migration
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    portal_project_root: "{{ playbook_dir }}/../.."
+    portal_revision: "{{ lookup('pipe', 'git -C ' ~ portal_project_root ~ ' rev-parse HEAD') | trim }}"
+    portal_release_root: /opt/gway-ap-kiosk/portal/candidates
+    portal_candidate_dir: "{{ portal_release_root }}/{{ portal_revision }}"
+  tasks:
+    - name: Require full Git revision
+      ansible.builtin.assert:
+        that:
+          - portal_revision is match('^[0-9a-f]{40}$')
+        fail_msg: "Candidate staging requires a full Git commit SHA"
+
+    - name: Create root-owned candidate directories
+      become: true
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+        follow: false
+      loop:
+        - "{{ portal_release_root }}"
+        - "{{ portal_candidate_dir }}"
+        - "{{ portal_candidate_dir }}/scripts"
+        - "{{ portal_candidate_dir }}/config"
+        - "{{ portal_candidate_dir }}/config/data"
+        - "{{ portal_candidate_dir }}/config/data/ap_portal"
+
+    - name: Stage stdlib-only Python portal executable
+      become: true
+      ansible.builtin.copy:
+        src: "{{ portal_project_root }}/scripts/ap_portal_server.py"
+        dest: "{{ portal_candidate_dir }}/scripts/ap_portal_server.py"
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Stage portal assets without touching the live Nginx site
+      become: true
+      ansible.builtin.copy:
+        src: "{{ portal_project_root }}/config/data/ap_portal/{{ item }}"
+        dest: "{{ portal_candidate_dir }}/config/data/ap_portal/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - index.html
+        - app.css
+        - app.js
+
+    - name: Stage service candidate, never install or start it
+      become: true
+      ansible.builtin.template:
+        src: "{{ portal_project_root }}/ansible/templates/gway-ap-portal-candidate.service.j2"
+        dest: "{{ portal_candidate_dir }}/gway-ap-portal.service"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Stage Nginx location candidate, never enable it
+      become: true
+      ansible.builtin.copy:
+        src: "{{ portal_project_root }}/config/nginx/gway-ap-portal.location"
+        dest: "{{ portal_candidate_dir }}/gway-ap-portal.location"
+        owner: root
+        group: root
+        mode: "0644"
