@@ -84,7 +84,8 @@ def run_server(*, socket_path: Path, lock_path: Path, uid: int) -> None:
         raise BrokerRejected("socket exists; refusing replacement")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
         listener.bind(str(socket_path))
-        os.chmod(socket_path, 0o600)  # owner must be provisioned explicitly
+        os.chown(socket_path, uid, -1)
+        os.chmod(socket_path, 0o600)  # restricted to configured peer UID
         listener.listen(4)
         try:
             while True:
