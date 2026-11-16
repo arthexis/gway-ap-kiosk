@@ -1084,7 +1084,7 @@ def build_config(args: argparse.Namespace) -> PortalConfig:
         preauth_allow_entries=_normalize_preauth_allow_entries(preauth_entries),
         sync_firewall=not args.skip_firewall_sync,
         local_development_mac=local_development_mac or None,
-        coordinated_firewall=args.coordinated_firewall,
+        coordinated_firewall=getattr(args, "coordinated_firewall", False),
     )
 
 
