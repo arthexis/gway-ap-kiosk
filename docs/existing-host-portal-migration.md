@@ -121,3 +121,42 @@ without explicit fsync/transaction journal. Startup reconciliation must not
 be treated as a full crash-consistency proof. Privilege separation,
 filesystem crash recovery, dedicated-host scope verification, concurrent
 unmanaged firewall writers, and physical client acceptance remain blocked.
+
+## Stage 3 — restricted broker and durable uncertainty (offline only)
+
+Candidate code includes `portal_nft_broker.py`, `portal_nft_client.py`
+and `portal_grant_intent.py`. The browser-facing portal remains `User=arthe`
+with `NoNewPrivileges=yes`, and its candidate unit requests additive grants
+only through `/run/gway-ap-nft/broker.sock`. A separate *uninstalled*
+root-owned broker candidate has only `CAP_NET_ADMIN` in its capability
+bounding set; it authenticates the caller using kernel `SO_PEERCRED` with
+an exact non-root UID, rejects commands other than bounded `add` and
+read-only prerequisite `check`, and never accepts nft commands or set names
+from the client. It serializes its nft batches on a root-owned lock.
+
+The portal and replacement legacy sync helper also share
+`authorization.lock` for state changes; the helper routes through the
+broker and refuses use without the cutover gate. Both file locking and
+broker locking must be respected by **all** deployed writers before this
+can protect the host. The broker's socket is accessible only to the
+configured non-root UID; the root-owned parent directory remains
+non-writable by that UID.
+
+A coordinated registration now creates and fsyncs a private
+`authorization.pending` marker before changing persistent files. It fsyncs
+consent, activity and allowlist before requesting the nft grant, and
+fsyncs compensation before clearing uncertainty. If interrupted, a later
+portal startup refuses service until an operator inspects state and both
+sets. **Do not simply remove an uncertain marker**, because the nft batch
+may have succeeded while the process was interrupted. The recovery workflow
+requires verified state/backups and evidence about the actual firewall
+grants. This is fail-closed crash detection, not fully automated rollback.
+
+Open activation blockers: ensure old `.path` and service writers are
+actually disabled, review privilege and socket directory ownership,
+validate all nft base-chain policies and collision with external writers,
+bound large grant inventories (broker currently allows at most 64 per
+request), establish a trusted manual UNCERTAIN recovery receipt, migrate
+existing state with verified ownership, and physically test AP clients.
+**Do not stage on gway-001 or activate either candidate under issue #31
+without a separate approved rollout.**
