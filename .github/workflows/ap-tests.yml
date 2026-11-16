@@ -16,11 +16,11 @@ jobs:
         with:
           python-version: '3.11'
       - name: Compile Python sources
-        run: python -m compileall -q kiosk/bin/gway-kiosk-status scripts/ap/kiosk-ap scripts/ap_portal_server.py scripts/portal_firewall_coordinator.py scripts/portal_migration_preflight.py scripts/portal_authorization_reconcile.py scripts/portal_nft_broker.py scripts/portal_nft_client.py scripts/portal_grant_intent.py tests
+        run: python -m compileall -q kiosk/bin/gway-kiosk-status scripts/ap/kiosk-ap scripts/ap_portal_server.py scripts/portal_firewall_coordinator.py scripts/portal_migration_preflight.py scripts/portal_authorization_reconcile.py scripts/portal_nft_broker.py scripts/portal_nft_client.py scripts/portal_grant_intent.py scripts/portal_uncertain_receipt.py tests
       - name: Install test dependencies
         run: python -m pip install pytest ansible-core
       - name: Run AP and kiosk regression tests
-        run: python -m pytest -q --durations=0 --durations-min=0.001 tests/test_kiosk_ap_reset.py tests/test_kiosk_independence.py tests/test_kiosk_ap_discovery.py tests/test_ap_portal_server.py tests/test_kiosk_ap_security.py tests/test_ansible_install_contract.py tests/test_immutable_stage_contract.py tests/test_uplink_recovery.py tests/test_portal_migration_preflight.py tests/test_portal_firewall_coordinator.py tests/test_portal_stage_contract.py tests/test_ap_portal_coordinated.py tests/test_portal_reconcile.py tests/test_portal_broker_intent.py
+        run: python -m pytest -q --durations=0 --durations-min=0.001 tests/test_kiosk_ap_reset.py tests/test_kiosk_independence.py tests/test_kiosk_ap_discovery.py tests/test_ap_portal_server.py tests/test_kiosk_ap_security.py tests/test_ansible_install_contract.py tests/test_immutable_stage_contract.py tests/test_uplink_recovery.py tests/test_portal_migration_preflight.py tests/test_portal_firewall_coordinator.py tests/test_portal_stage_contract.py tests/test_ap_portal_coordinated.py tests/test_portal_reconcile.py tests/test_portal_broker_intent.py tests/test_portal_uncertain_receipt.py
       - name: Test real routes in an isolated network namespace
         run: sudo "$(command -v python)" -m pytest -q tests/test_uplink_kernel.py
       - name: Ansible syntax
