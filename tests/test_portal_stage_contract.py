@@ -48,3 +48,9 @@ def test_broker_candidate_is_unactivated_and_root_capability_isolated():
     assert "--nft-broker-socket /run/gway-ap-nft/broker.sock" in portal
     assert "User=arthe" in portal
     assert "CapabilityBoundingSet=CAP_NET_ADMIN" not in portal
+
+def test_candidate_portal_forces_private_state_creation():
+    unit = (ROOT / "ansible/templates/gway-ap-portal-candidate.service.j2").read_text()
+    assert "UMask=0077" in unit
+    assert "User=arthe" in unit
+    assert "NoNewPrivileges=yes" in unit
