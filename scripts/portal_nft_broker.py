@@ -72,6 +72,7 @@ def serve_request(conn, *, uid: int, coordinator, lock_path: Path) -> None:
         message.extend(fragment)
     if len(message) > MAX_REQUEST:
         raise BrokerRejected("request exceeds maximum")
+    raw = bytes(message)
     macs = decode_request(raw)
     op = json.loads(raw)["op"]
     # Broker-controlled lock distinct from the portal's state-file lock:
