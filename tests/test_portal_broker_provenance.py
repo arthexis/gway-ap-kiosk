@@ -84,3 +84,24 @@ def test_invalid_utf8_grants_fail_closed(tmp_path):
     (directory / "authorized_macs.txt").write_bytes(b"\xff\xfe")
     with pytest.raises(module.BrokerRejected, match="encoding"):
         module.verify_persisted_grants(directory, {MAC}, uid=os.getuid())
+
+
+def test_racing_allowlist_replacement_is_rejected(tmp_path, monkeypatch):
+    directory = setup_state(tmp_path)
+    real_stat = module.os.stat
+    triggered = False
+    def racing_stat(path, *args, **kwargs):
+        nonlocal triggered
+        if path == "authorized_macs.txt" and "dir_fd" in kwargs and not triggered:
+            triggered = True
+            original = directory / "authorized_macs.txt"
+            replacement = directory / "replacement"
+            replacement.write_text(MAC + "\\n")
+            replacement.chmod(0o600)
+            original.replace(directory / "old-allowlist")
+            replacement.replace(original)
+        return real_stat(path, *args, **kwargs)
+    monkeypatch.setattr(module.os, "stat", racing_stat)
+    with pytest.raises(module.BrokerRejected, match="changed"):
+        module.verify_persisted_grants(directory, {MAC}, uid=os.getuid())
+    assert triggered
