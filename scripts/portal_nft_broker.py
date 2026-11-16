@@ -34,7 +34,7 @@ def authorize_peer(conn, *, allowed_uid: int) -> None:
         pid, uid, _gid = struct.unpack("3i", creds)
     except (OSError, struct.error) as exc:
         raise BrokerRejected("peer credentials unavailable") from exc
-    if pid <= 0: 
+    if pid <= 0:
         raise BrokerRejected("invalid peer process")
     if uid != allowed_uid or uid == 0:
         raise BrokerRejected("peer not permitted")
@@ -47,7 +47,7 @@ def decode_request(data: bytes) -> set[str]:
         payload = json.loads(data[:-1].decode("utf-8"))
     except (UnicodeError, ValueError) as exc:
         raise BrokerRejected("invalid request") from exc
-    if not isinstance(payload, dict) or set(payload) != {"op", "macs"} or payload["op"] not in {"add", "check"}:
+    if not isinstance(payload, dict) or set(payload) != {"op", "macs"} or not isinstance(payload["op"], str) or payload["op"] not in {"add", "check"}:
         raise BrokerRejected("unsupported operation")
     values = payload["macs"]
     if not isinstance(values, list) or len(values) > MAX_MACS or (payload["op"] == "add" and not values) or (payload["op"] == "check" and values):
