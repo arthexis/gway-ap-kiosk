@@ -79,3 +79,15 @@ and authorization-file commit/rollback, verify crash recovery/reconciliation,
 ensure idempotence and rollback of staged artifacts, and review physical
 clients. The current server still uses its original table-replacing sync:
 **do not enable the candidate unit or create the approval marker.**
+
+## Legacy sync collision — verified in repository
+
+`scripts/ap/gway-ap-authorized-firewall-sync` invokes `flush set inet
+host_security ap_allowed_macs`, then repopulates from the portal-owned
+authorization files, potentially erasing independently managed grants. It
+also attempts `inet arthexis_ap_portal authorized_macs`, not the current
+`inet gway_ap_portal` table. Its systemd path unit watches files in the
+retired checkout. This is a **cutover blocker**: disable/replace the legacy
+writer only in a separately reviewed transactional activation with an
+exclusive writer lock, preserved independent grants and recovery proof.
+No new script should race the old path/service.
