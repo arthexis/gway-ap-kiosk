@@ -53,6 +53,7 @@
         - portal_nft_client.py
         - portal_nft_broker.py
         - portal_grant_intent.py
+        - portal_cutover_contract.py
 
     - name: Stage portal assets without touching the live Nginx site
       become: true
@@ -111,6 +112,7 @@
         - scripts/portal_nft_client.py
         - scripts/portal_nft_broker.py
         - scripts/portal_grant_intent.py
+        - scripts/portal_cutover_contract.py
         - config/data/ap_portal/index.html
         - config/data/ap_portal/app.css
         - config/data/ap_portal/app.js
