@@ -6,13 +6,15 @@ ConditionPathExists=/etc/gway-ap-kiosk/portal-activation-approved
 
 [Service]
 Type=simple
-User=arthe
-Group=arthe
+User=gwayap
+Group=gwayap
 WorkingDirectory={{ portal_candidate_dir }}
 ExecStart=/usr/bin/python3 {{ portal_candidate_dir }}/scripts/ap_portal_server.py --bind 127.0.0.1 --port 9080 --assets-dir {{ portal_candidate_dir }}/config/data/ap_portal --state-dir /var/lib/gway-ap-kiosk/portal --coordinated-firewall --nft-broker-socket /run/gway-ap-nft/broker.sock
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=yes
+ProtectHome=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 UMask=0077
 PrivateTmp=yes
 ProtectSystem=strict
