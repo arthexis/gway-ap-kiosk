@@ -13,6 +13,7 @@ ExecStart=/usr/bin/python3 {{ portal_candidate_dir }}/scripts/ap_portal_server.p
 Restart=on-failure
 RestartSec=2
 NoNewPrivileges=yes
+UMask=0077
 PrivateTmp=yes
 ProtectSystem=strict
 ReadWritePaths=/var/lib/gway-ap-kiosk/portal
