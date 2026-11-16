@@ -56,11 +56,11 @@ def test_atomic_add_and_idempotence_retains_independent_grant():
     assert FOREIGN in fake.elements[mod.SETS[0]]
     assert coordinator.add({MAC}) == {key: set() for key in mod.SETS}
     assert len(fake.batches) == 1
-    with pytest.raises(mod.CoordinationError, match="exclusive"):
-        coordinator.rollback(delta)
-    coordinator.rollback(delta, exclusive_lock=True)
+    assert not hasattr(coordinator, "rollback")
+    # No rollback path can delete grants adopted by independent components.
+    assert all(MAC in fake.elements[key] for key in mod.SETS)
     assert FOREIGN in fake.elements[mod.SETS[0]]
-    assert all(MAC not in fake.elements[key] for key in mod.SETS)
+    assert all(not batch.startswith("delete ") for batch in fake.batches)
 
 
 @pytest.mark.parametrize("failure", ["missing", "batch"])
