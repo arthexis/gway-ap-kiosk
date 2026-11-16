@@ -8,7 +8,7 @@ internet reachability for that check, not Watchtower or charger availability.
 
 After three failed checks on the normally preferred route and a successful check
 on another route, the service adds a temporary default route (metric 5, protocol
-186) through the healthy alternative. It keeps NetworkManager profiles, IP
+242) through the healthy alternative. It keeps NetworkManager profiles, IP
 addresses and connected routes unchanged. It removes only its own route after four
 successful preferred-path checks. If the selected alternate fails, it can replace
 its own route with another proven uplink. When no alternative is proven, the
@@ -27,9 +27,9 @@ and, if present, inspect and remove only the controller-owned default route:
 
 ```sh
 sudo systemctl disable --now gway-uplink-recovery.timer
-ip -4 route show default proto 186
+ip -4 route show default proto 242
 # After checking the exact gateway and interface shown above:
-sudo ip -4 route del default via <gateway> dev <interface> metric 5 proto 186
+sudo ip -4 route del default via <gateway> dev <interface> metric 5 proto 242
 ```
 
 The state in `/run/gway-uplink-recovery` is temporary and contains only counters.

@@ -13,13 +13,13 @@ loader.exec_module(m)
 
 
 def route(dev, metric, gateway='192.168.1.1', protocol='static'):
-    return {'dev': dev, 'metric': metric, 'gateway': gateway, 'protocol': protocol}
+    return {'dev': dev, 'metric': metric, 'gateway': gateway, 'protocol': protocol, '_owned': protocol == m.PROTOCOL}
 
 
 def setup_cycle(monkeypatch, tmp_path, rows, online):
     monkeypatch.setattr(m, 'STATE', tmp_path / 'state.json')
     monkeypatch.setattr(m, 'routes', lambda: rows)
-    monkeypatch.setattr(m, 'candidates', lambda r: sorted([x for x in r if x['protocol'] != m.PROTOCOL], key=lambda x: x['metric']))
+    monkeypatch.setattr(m, 'candidates', lambda r: sorted([x for x in r if not x['_owned']], key=lambda x: x['metric']))
     monkeypatch.setattr(m, 'healthy', lambda dev: online[dev])
     changes = []
     monkeypatch.setattr(m, 'alter', lambda verb, r: changes.append((verb, r['dev'])))
@@ -93,3 +93,12 @@ def test_failed_override_uses_another_proven_path(monkeypatch, tmp_path):
     changes = setup_cycle(monkeypatch, tmp_path, rows, {'preferred': False, 'backup': False, 'third': True})
     for _ in range(3): m.cycle()
     assert changes == [('replace', 'third')]
+
+
+def test_owned_routes_use_kernel_protocol_filter_not_displayed_name(monkeypatch):
+    base = {'dev': 'eth0', 'metric': 5, 'gateway': '192.168.1.1', 'protocol': 'locally-named-protocol'}
+    def cmd(args, timeout=12):
+        return subprocess.CompletedProcess(args, 0, json.dumps([base]), '')
+    monkeypatch.setattr(m, 'command', cmd)
+    rows = m.routes()
+    assert m.override(rows)['dev'] == 'eth0'
