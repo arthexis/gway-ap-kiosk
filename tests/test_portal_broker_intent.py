@@ -48,10 +48,12 @@ def test_broker_validates_peer_uid_not_header(monkeypatch, tmp_path):
         def __init__(self, uid):
             self.uid = uid
             self.out = []
+            self.reads = 0
         def getsockopt(self, *args):
             return struct.pack("3i", 42, self.uid, 42)
         def recv(self, n):
-            return json.dumps({"op": "add", "macs": [MAC]}).encode() + b"\n"
+            self.reads += 1
+            return (json.dumps({"op": "add", "macs": [MAC]}).encode() + b"\n") if self.reads == 1 else b""
         def sendall(self, data):
             self.out.append(data)
     class Coordinator:
@@ -118,3 +120,28 @@ def test_broker_client_failure_is_closed(tmp_path):
         client.snapshot()
     with pytest.raises(client_mod.CoordinationError):
         client.add({"bad; flush ruleset"})
+
+
+def test_broker_rejects_second_frame_and_untrusted_uid(tmp_path):
+    payload = json.dumps({"op": "add", "macs": [MAC]}).encode() + b"\n"
+    with pytest.raises(broker.BrokerRejected):
+        broker.decode_request(payload + payload)
+    assert broker.decode_request(json.dumps({"op": "check", "macs": []}).encode()+b"\n") == set()
+
+
+def test_broker_supports_over_64_grants_atomically():
+    values = [f"02:00:00:{i//65536:02x}:{(i//256)%256:02x}:{i%256:02x}" for i in range(130)]
+    msg = json.dumps({"op":"add","macs":values}).encode() + b"\n"
+    assert len(broker.decode_request(msg)) == 130
+    assert len(msg) <= broker.MAX_REQUEST
+    too_many = [f"02:00:{i//(256*256*256):02x}:{(i//65536)%256:02x}:{(i//256)%256:02x}:{i%256:02x}" for i in range(broker.MAX_MACS + 1)]
+    with pytest.raises(broker.BrokerRejected):
+        broker.decode_request(json.dumps({"op":"add","macs":too_many}).encode()+b"\n")
+
+
+def test_malformed_peer_credentials_rejected():
+    class Fake:
+        def getsockopt(self, *_):
+            return b"bad"
+    with pytest.raises(broker.BrokerRejected):
+        broker.authorize_peer(Fake(), allowed_uid=123)
