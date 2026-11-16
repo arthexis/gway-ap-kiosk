@@ -1,0 +1,16 @@
+[Unit]
+Description=Select a verified GWAY internet uplink
+After=NetworkManager.service network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/gway-uplink-recovery
+TimeoutStartSec=60
+RuntimeDirectory=gway-uplink-recovery
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/run/gway-uplink-recovery

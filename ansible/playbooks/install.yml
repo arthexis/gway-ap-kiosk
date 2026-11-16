@@ -77,6 +77,15 @@
         - { src: scripts/ap/kiosk-ap, dest: /usr/local/sbin/kiosk-ap }
       notify: Restart kiosk status
 
+    - name: Install uplink recovery executable
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/scripts/ap/gway-uplink-recovery"
+        dest: /usr/local/sbin/gway-uplink-recovery
+        owner: root
+        group: root
+        mode: "0755"
+
     - name: Install read-only kiosk activation evidence checker
       become: true
       ansible.builtin.copy:
@@ -121,6 +130,19 @@
       notify:
         - Reload systemd
         - Restart kiosk status
+
+    - name: Install uplink recovery systemd units
+      become: true
+      ansible.builtin.copy:
+        src: "{{ project_root }}/kiosk/systemd/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - gway-uplink-recovery.service
+        - gway-uplink-recovery.timer
+      notify: Reload systemd
 
     - name: Prepare GWAY HDMI systemd drop-in directories
       become: true
@@ -200,6 +222,14 @@
       become: true
       ansible.builtin.systemd_service:
         name: gway-kiosk-status.service
+        enabled: true
+        state: started
+
+    - name: Enable uplink recovery timer
+      when: not kiosk_ci_mode | bool
+      become: true
+      ansible.builtin.systemd_service:
+        name: gway-uplink-recovery.timer
         enabled: true
         state: started
 
