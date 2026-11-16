@@ -130,11 +130,15 @@ def serve_request(conn, *, uid: int, coordinator, lock_path: Path, state_dir: Pa
     conn.sendall(b'{"ok":true}\n')
 
 
-def run_server(*, socket_path: Path, lock_path: Path, uid: int, state_dir: Path | None = None) -> None:
+def run_server(*, socket_path: Path, lock_path: Path, uid: int, state_dir: Path | None = None, cutover_contract: Path | None = None) -> None:
     if os.geteuid() != 0 or uid <= 0:
         raise BrokerRejected("dedicated root broker and non-root peer required")
     if state_dir is None:
         raise BrokerRejected("pinned state directory required")
+    if cutover_contract is None:
+        raise BrokerRejected("root-owned cutover contract required")
+    from portal_cutover_contract import check_contract
+    check_contract(cutover_contract)
     if socket_path.exists() or socket_path.is_symlink():
         raise BrokerRejected("socket exists; refusing replacement")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
@@ -166,8 +170,9 @@ def main() -> int:
     p.add_argument("--lock", type=Path, required=True)
     p.add_argument("--uid", type=int, required=True)
     p.add_argument("--state-dir", type=Path, required=True)
+    p.add_argument("--cutover-contract", type=Path, required=True)
     args = p.parse_args()
-    run_server(socket_path=args.socket, lock_path=args.lock, uid=args.uid, state_dir=args.state_dir)
+    run_server(socket_path=args.socket, lock_path=args.lock, uid=args.uid, state_dir=args.state_dir, cutover_contract=args.cutover_contract)
     return 0
 
 
