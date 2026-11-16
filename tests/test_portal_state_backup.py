@@ -71,3 +71,33 @@ def test_missing_and_replaced_entries_detected(tmp_path):
     (backup/"activity.jsonl").unlink()
     with pytest.raises(mod.BackupError):
         mod.verify_snapshot(backup)
+
+
+def test_interleaved_source_mutation_blocks_snapshot_manifest(tmp_path, monkeypatch):
+    original = state(tmp_path)
+    backup = tmp_path / "backup"
+    real_read = mod._read
+    reads = 0
+
+    def mutate_after_first_read(fd, name):
+        nonlocal reads
+        result = real_read(fd, name)
+        reads += 1
+        if reads == 2:
+            path = original / "authorized_macs.txt"
+            path.write_text("changed while snapshot underway\n")
+        return result
+
+    monkeypatch.setattr(mod, "_read", mutate_after_first_read)
+    with pytest.raises(mod.BackupError, match="source changed"):
+        mod.create_snapshot(original, backup)
+    assert not (backup / "manifest.json").exists()
+    assert (original / "authorization.pending").exists()
+
+
+def test_independent_nft_grants_are_not_in_backup_scope(tmp_path):
+    original = state(tmp_path)
+    manifest = mod.create_snapshot(original, tmp_path / "backup")
+    assert manifest["firewall_verified"] is False
+    assert "host_security" not in str(manifest)
+    assert "nftables" not in str(manifest)
