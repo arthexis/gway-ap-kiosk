@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import ipaddress
 import json
 import logging
@@ -90,6 +92,7 @@ class PortalConfig:
     preauth_allow_entries: tuple[str, ...] = DEFAULT_PREAUTH_ALLOW_ENTRIES
     sync_firewall: bool = True
     local_development_mac: str | None = None
+    coordinated_firewall: bool = False
 
 
 class FirewallSyncError(RuntimeError):
@@ -488,7 +491,87 @@ class PortalState:
         self._authorized = _read_authorized_macs(self.config.authorized_macs_path)
         self._trusted = _read_trusted_macs(self.config.trusted_macs_path)
         if self.config.sync_firewall:
-            self._firewall.sync(self._effective_authorized_macs())
+            if self.config.coordinated_firewall:
+                with self._authorization_lock():
+                    self._coordinator().add(self._effective_authorized_macs()) if self._effective_authorized_macs() else self._coordinator().snapshot()
+            else:
+                self._firewall.sync(self._effective_authorized_macs())
+
+    @contextlib.contextmanager
+    def _authorization_lock(self):
+        # Shared by the replacement helper and the portal; requires exclusive
+        # ownership of the legacy sync service before any activation.
+        path = self.config.state_dir / "authorization.lock"
+        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+
+    def _coordinator(self):
+        from portal_firewall_coordinator import NftGrantCoordinator
+        return NftGrantCoordinator()
+
+    def _subscribe_coordinated(self, *, record, mac_address, already_authorized,
+                               trusted, ip_address, normalized_email, user_agent, host):
+        # Lock covers log writes, persistent allowlist and one atomic nft batch.
+        # No network authorization precedes consent + audit persistence.
+        with self._authorization_lock():
+            self._authorized = _read_authorized_macs(self.config.authorized_macs_path)
+            self._trusted = _read_trusted_macs(self.config.trusted_macs_path)
+            already_authorized, trusted = self._authorization_for_mac(mac_address)
+            previous_authorized = set(self._authorized)
+            previous_existed = self.config.authorized_macs_path.exists()
+            next_authorized = previous_authorized | {mac_address}
+            consent_position = self._consent_log_position()
+            activity_position = self.config.activity_path.stat().st_size if self.config.activity_path.exists() else None
+            try:
+                self._append_consent(record)
+                self.activity.record(
+                    "consent_accepted", ip_address=ip_address, mac_address=mac_address,
+                    email=normalized_email, already_authorized=already_authorized,
+                    trusted_device=trusted, user_agent=user_agent, host=host)
+                if not already_authorized:
+                    self._write_authorized_macs(next_authorized)
+                if self.config.sync_firewall:
+                    # Even a previously authorized device can be missing a grant
+                    # after service restart; reconcile both sets additively.
+                    self._coordinator().add(next_authorized | self._trusted)
+            except Exception as failure:
+                # A failed nft batch is atomic. If any compensation fails,
+                # propagate the failure instead of reporting authorization.
+                errors = []
+                for action in (
+                    lambda: self._restore_authorized_macs(previous_authorized, existed=previous_existed),
+                    lambda: self._restore_consent_log(consent_position),
+                    lambda: self._restore_activity_log(activity_position),
+                ):
+                    try:
+                        action()
+                    except OSError as exc:
+                        errors.append(exc)
+                if errors:
+                    raise OSError("authorization compensation incomplete") from failure
+                raise
+            self._authorized = next_authorized
+            return {
+                "authorized": True,
+                "already_authorized": already_authorized,
+                "trusted_device": trusted,
+                "mac_address": mac_address,
+                "monitoring_notice": MONITORING_NOTICE,
+                "source_code_url": self.config.source_url,
+            }
+
+    def _restore_activity_log(self, position: int | None) -> None:
+        path = self.config.activity_path
+        if position is None:
+            path.unlink(missing_ok=True)
+        else:
+            with path.open("r+b") as handle:
+                handle.truncate(position)
 
     def _effective_authorized_macs(self) -> set[str]:
         return self._authorized | self._trusted
@@ -602,6 +685,12 @@ class PortalState:
         }
 
         with self._lock:
+            if self.config.coordinated_firewall:
+                return self._subscribe_coordinated(
+                    record=record, mac_address=mac_address,
+                    already_authorized=False, trusted=False,
+                    ip_address=ip_address, normalized_email=normalized_email,
+                    user_agent=user_agent, host=host)
             already_authorized, trusted = self._authorization_for_mac(mac_address)
             if not already_authorized:
                 previous_authorized = set(self._authorized)
@@ -978,6 +1067,7 @@ def build_config(args: argparse.Namespace) -> PortalConfig:
         preauth_allow_entries=_normalize_preauth_allow_entries(preauth_entries),
         sync_firewall=not args.skip_firewall_sync,
         local_development_mac=local_development_mac or None,
+        coordinated_firewall=args.coordinated_firewall,
     )
 
 
