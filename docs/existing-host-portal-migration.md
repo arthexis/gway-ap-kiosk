@@ -271,3 +271,34 @@ Do not create this file based only on offline tests.
 No step above has been run against `gway-001`; the playbook still only
 stages unactivated files and neither the root contract nor dedicated
 service account is created by this PR.
+
+## Stage 6 — offline backup and strict sandbox restore validation
+
+`scripts/portal_state_backup.py` provides an offline-only library for
+`create_snapshot(source, destination)`, `verify_snapshot(snapshot)`,
+and `restore_to_empty_sandbox(snapshot, target)`. It copies only the
+explicitly listed portal state files into a new private directory with
+mode 0600, fsyncs file content and directory entries, and records a
+private integrity manifest. The manifest contains sensitive file digests;
+**never post the manifest or backup itself to GitHub**. A comparison
+failure, an unsafe symlink, unexpected ownership/permissions or an
+oversized file blocks verification. This is a state-file integrity
+check, **not** an nftables/chain backup, writer-quiescence proof or full
+snapshot consistency certificate. State must be quiesced by an
+independently verified operator before capture.
+
+The restore function only populates a new private directory beneath
+the system temporary root. It rejects existing targets, live service
+paths, unsafe parents and tampered archives. It preserves
+`authorization.pending` byte-for-byte and never approves runtime
+restoration. No backup, restore, firewall or service operations have
+been performed on a real node.
+
+Broker provenance now compares open-descriptor metadata against the
+current directory entry after each read to detect observed replacement
+or in-place changes; this narrows TOCTOU, but a writable same-UID
+allowlist and external writers remain a risk. Broker lock acquisition
+is nonblocking and rejects an already held lock rather than waiting
+without a bound. Neither protection replaces exclusive runtime writer
+ownership. The pending marker is never removed by the backup or
+operator receipt tools.
