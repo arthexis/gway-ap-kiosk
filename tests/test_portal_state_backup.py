@@ -101,3 +101,25 @@ def test_independent_nft_grants_are_not_in_backup_scope(tmp_path):
     assert manifest["firewall_verified"] is False
     assert "host_security" not in str(manifest)
     assert "nftables" not in str(manifest)
+
+
+def test_restore_rejects_backup_changed_after_integrity_check(tmp_path, monkeypatch):
+    original = state(tmp_path)
+    backup = tmp_path / "backup"
+    mod.create_snapshot(original, backup)
+    verified = mod.verify_snapshot
+
+    def mutate_after_verification(snapshot, **kwargs):
+        receipt = verified(snapshot, **kwargs)
+        # Same-size mutation simulates a backup swap between integrity proof
+        # and restore. No restored content may be certified as clean.
+        file = backup / "authorized_macs.txt"
+        data = file.read_bytes()
+        file.write_bytes(b"X" + data[1:])
+        return receipt
+
+    monkeypatch.setattr(mod, "verify_snapshot", mutate_after_verification)
+    with pytest.raises(mod.BackupError, match="changed between verification and restore"):
+        mod.restore_to_empty_sandbox(backup, tmp_path / "restore")
+    assert (original / "authorization.pending").exists()
+    assert not (tmp_path / "restore" / "authorized_macs.txt").exists()
