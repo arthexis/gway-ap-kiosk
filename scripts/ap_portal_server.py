@@ -492,6 +492,8 @@ class PortalState:
         self._trusted = _read_trusted_macs(self.config.trusted_macs_path)
         if self.config.sync_firewall:
             if self.config.coordinated_firewall:
+                from portal_grant_intent import GrantIntent
+                GrantIntent(self.config.state_dir).ensure_clean()
                 with self._authorization_lock():
                     self._coordinator().add(self._effective_authorized_macs()) if self._effective_authorized_macs() else self._coordinator().snapshot()
             else:
@@ -536,6 +538,9 @@ class PortalState:
         # Lock covers log writes, persistent allowlist and one atomic nft batch.
         # No network authorization precedes consent + audit persistence.
         with self._authorization_lock():
+            from portal_grant_intent import GrantIntent
+            intent = GrantIntent(self.config.state_dir)
+            intent.ensure_clean()
             self._authorized = _read_authorized_macs(self.config.authorized_macs_path)
             self._trusted = _read_trusted_macs(self.config.trusted_macs_path)
             already_authorized, trusted = self._authorization_for_mac(mac_address)
@@ -544,6 +549,7 @@ class PortalState:
             next_authorized = previous_authorized | {mac_address}
             consent_position = self._consent_log_position()
             activity_position = self.config.activity_path.stat().st_size if self.config.activity_path.exists() else None
+            intent.begin()
             try:
                 self._append_consent(record)
                 self.activity.record(
@@ -571,7 +577,9 @@ class PortalState:
                         errors.append(exc)
                 if errors:
                     raise OSError("authorization compensation incomplete") from failure
+                intent.finish()
                 raise
+            intent.finish()
             self._authorized = next_authorized
             return {
                 "authorized": True,
