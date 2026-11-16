@@ -42,6 +42,7 @@
         owner: root
         group: root
         mode: "0755"
+        force: false
 
     - name: Stage portal assets without touching the live Nginx site
       become: true
@@ -51,6 +52,7 @@
         owner: root
         group: root
         mode: "0644"
+        force: false
       loop:
         - index.html
         - app.css
@@ -64,6 +66,7 @@
         owner: root
         group: root
         mode: "0644"
+        force: false
 
     - name: Stage Nginx location candidate, never enable it
       become: true
@@ -73,3 +76,18 @@
         owner: root
         group: root
         mode: "0644"
+        force: false
+
+    - name: Verify every staged file matches this revision without overwriting existing candidates
+      ansible.builtin.command:
+        argv:
+          - cmp
+          - -s
+          - "{{ portal_project_root }}/{{ item }}"
+          - "{{ portal_candidate_dir }}/{{ item }}"
+      loop:
+        - scripts/ap_portal_server.py
+        - config/data/ap_portal/index.html
+        - config/data/ap_portal/app.css
+        - config/data/ap_portal/app.js
+      changed_when: false
