@@ -23,7 +23,7 @@ def test_candidate_unit_uses_supported_arguments_and_no_developer_venv():
     assert "--suite-login-host" not in unit
     assert ".venv" not in unit
     assert "ConditionPathExists=/etc/gway-ap-kiosk/portal-activation-approved" in unit
-    assert "User=arthe" in unit
+    assert "User=gwayap" in unit
 
 
 def test_nginx_candidate_restricts_upstream_to_loopback():
@@ -45,12 +45,14 @@ def test_broker_candidate_is_unactivated_and_root_capability_isolated():
     assert "RuntimeDirectoryMode=0711" in unit
     assert "NoNewPrivileges=yes" in unit
     assert "--uid {{ portal_operator_uid }}" in unit
+    assert "--state-dir /var/lib/gway-ap-kiosk/portal" in unit
+    assert "ReadOnlyPaths=/var/lib/gway-ap-kiosk/portal" in unit
     assert "--nft-broker-socket /run/gway-ap-nft/broker.sock" in portal
-    assert "User=arthe" in portal
+    assert "User=gwayap" in portal
     assert "CapabilityBoundingSet=CAP_NET_ADMIN" not in portal
 
 def test_candidate_portal_forces_private_state_creation():
     unit = (ROOT / "ansible/templates/gway-ap-portal-candidate.service.j2").read_text()
     assert "UMask=0077" in unit
-    assert "User=arthe" in unit
+    assert "User=gwayap" in unit
     assert "NoNewPrivileges=yes" in unit
