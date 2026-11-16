@@ -96,7 +96,7 @@ def test_racing_allowlist_replacement_is_rejected(tmp_path, monkeypatch):
             triggered = True
             original = directory / "authorized_macs.txt"
             replacement = directory / "replacement"
-            replacement.write_text(MAC + "\\n")
+            replacement.write_text(MAC + "\n")
             replacement.chmod(0o600)
             original.replace(directory / "old-allowlist")
             replacement.replace(original)
