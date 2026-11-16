@@ -70,3 +70,17 @@ def test_pending_marker_must_be_private_and_owned(tmp_path):
     pending.chmod(0o644)
     with pytest.raises(module.BrokerRejected, match="pending"):
         module.verify_persisted_grants(directory, {MAC}, uid=os.getuid())
+
+
+def test_state_file_payload_is_bounded_without_any_nft_write(tmp_path):
+    directory = setup_state(tmp_path)
+    (directory / "authorized_macs.txt").write_text("x" * (1024 * 1024 + 1))
+    (directory / "authorized_macs.txt").chmod(0o600)
+    with pytest.raises(module.BrokerRejected, match="oversize"):
+        module.verify_persisted_grants(directory, {MAC}, uid=os.getuid())
+
+def test_invalid_utf8_grants_fail_closed(tmp_path):
+    directory = setup_state(tmp_path)
+    (directory / "authorized_macs.txt").write_bytes(b"\xff\xfe")
+    with pytest.raises(module.BrokerRejected, match="encoding"):
+        module.verify_persisted_grants(directory, {MAC}, uid=os.getuid())
