@@ -31,3 +31,20 @@ def test_nginx_candidate_restricts_upstream_to_loopback():
     assert "127.0.0.1:9080" in snippet
     assert "X-Real-IP" in snippet
     assert "X-Forwarded-For $remote_addr" in snippet
+
+
+def test_broker_candidate_is_unactivated_and_root_capability_isolated():
+    playbook = (ROOT / "ansible/playbooks/stage-portal.yml").read_text()
+    unit = (ROOT / "ansible/templates/gway-ap-nft-broker-candidate.service.j2").read_text()
+    portal = (ROOT / "ansible/templates/gway-ap-portal-candidate.service.j2").read_text()
+    assert "gway-ap-nft-broker.service" in playbook
+    for path in ("portal_nft_broker.py", "portal_nft_client.py", "portal_grant_intent.py"):
+        assert path in playbook
+    assert "User=root" in unit
+    assert "CapabilityBoundingSet=CAP_NET_ADMIN" in unit
+    assert "RuntimeDirectoryMode=0711" in unit
+    assert "NoNewPrivileges=yes" in unit
+    assert "--uid {{ portal_operator_uid }}" in unit
+    assert "--nft-broker-socket /run/gway-ap-nft/broker.sock" in portal
+    assert "User=arthe" in portal
+    assert "CapabilityBoundingSet=CAP_NET_ADMIN" not in portal
