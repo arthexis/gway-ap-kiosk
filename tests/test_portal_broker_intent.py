@@ -145,3 +145,24 @@ def test_malformed_peer_credentials_rejected():
             return b"bad"
     with pytest.raises(broker.BrokerRejected):
         broker.authorize_peer(Fake(), allowed_uid=123)
+
+
+def test_busy_broker_lock_refuses_firewall_write(tmp_path, monkeypatch):
+    class Conn:
+        def __init__(self):
+            self.reads = 0
+        def getsockopt(self, *_):
+            return struct.pack("3i", 42, 12345, 42)
+        def recv(self, size):
+            self.reads += 1
+            return (json.dumps({"op": "add", "macs": [MAC]}).encode() + b"\\n") if self.reads == 1 else b""
+        def sendall(self, data):
+            raise AssertionError("busy lock must not acknowledge success")
+    class Coordinator:
+        def add(self, macs):
+            raise AssertionError("busy lock must not call nft")
+    def busy_lock(*args):
+        raise BlockingIOError("locked")
+    monkeypatch.setattr(broker.fcntl, "flock", busy_lock)
+    with pytest.raises(broker.BrokerRejected, match="writer is active"):
+        broker.serve_request(Conn(), uid=12345, coordinator=Coordinator(), lock_path=tmp_path/"broker.lock")
