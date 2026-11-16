@@ -49,3 +49,33 @@ removing independent access.
 **Hold:** Do not deploy, enable portal firewall sync, retire old artifacts or
 close issue #31 on the basis of this preflight alone. Physical client acceptance
 and sanitized installation/rollback receipts remain mandatory.
+
+## Candidate staging and additive coordinator (Stage 1, not activated)
+
+`ansible-playbook -i localhost, -c local ansible/playbooks/stage-portal.yml`
+stages the Python standard-library server, three static assets, a service
+candidate and an Nginx location candidate under a revision-scoped directory
+in `/opt/gway-ap-kiosk/portal/candidates/`. It does **not** install or enable
+the service, configure Nginx, create persistent state, import legacy records,
+change nftables or start the portal. It is not an existing-host migration
+command. A reviewed activation step must first verify source cleanliness,
+candidate content hashes, stable state ownership and backup restore.
+
+`scripts/portal_firewall_coordinator.py` adds a deliberately **unwired**
+coordinated nftables grant primitive. It requires both pre-existing sets
+(`inet host_security ap_allowed_macs` and
+`inet gway_ap_portal authorized_macs`) of type `ether_addr`. Missing
+or incompatible sets fail closed; successful additions use a single nft
+batch and preserve independent grants. Its rollback API requires an explicit
+exclusive-writer assertion; this is a caller contract, **not yet an
+implemented host-wide lock**. Do not use it concurrently with the legacy
+sync helper. Neither source file state nor other firewall policies are
+rewritten by this primitive.
+
+**Required before activation:** establish the actual host firewall owner,
+handle base-chain verdicts (an accept in one chain cannot override a drop in
+another), serialize registration and legacy-sync writers, coordinate consent
+and authorization-file commit/rollback, verify crash recovery/reconciliation,
+ensure idempotence and rollback of staged artifacts, and review physical
+clients. The current server still uses its original table-replacing sync:
+**do not enable the candidate unit or create the approval marker.**
