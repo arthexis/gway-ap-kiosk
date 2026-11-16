@@ -11,6 +11,8 @@ from portal_firewall_coordinator import NftGrantCoordinator
 
 def load_macs(path: Path) -> set[str]:
     from portal_firewall_coordinator import MAC, CoordinationError
+    if path.is_symlink():
+        raise CoordinationError("unsafe authorization path")
     if not path.is_file():
         return set()
     result = set()
@@ -30,6 +32,8 @@ def reconcile(state_dir: Path, *, coordinator=None) -> None:
     fd = os.open(state_dir / "authorization.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
+        from portal_grant_intent import GrantIntent
+        GrantIntent(state_dir).ensure_clean()
         authorized = load_macs(state_dir / "authorized_macs.txt")
         trusted = load_macs(state_dir / "trusted_macs.txt")
         nft = coordinator or NftGrantCoordinator()
