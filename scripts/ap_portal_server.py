@@ -93,6 +93,7 @@ class PortalConfig:
     sync_firewall: bool = True
     local_development_mac: str | None = None
     coordinated_firewall: bool = False
+    nft_broker_socket: str = ""
 
 
 class FirewallSyncError(RuntimeError):
@@ -517,7 +518,11 @@ class PortalState:
 
         class CheckedCoordinator:
             def __init__(self):
-                self._nft = NftGrantCoordinator()
+                if config.nft_broker_socket:
+                    from portal_nft_client import BrokerClient
+                    self._nft = BrokerClient(config.nft_broker_socket)
+                else:
+                    self._nft = NftGrantCoordinator()
 
             def add(self, macs):
                 try:
@@ -1093,6 +1098,7 @@ def build_config(args: argparse.Namespace) -> PortalConfig:
         sync_firewall=not args.skip_firewall_sync,
         local_development_mac=local_development_mac or None,
         coordinated_firewall=getattr(args, "coordinated_firewall", False),
+        nft_broker_socket=getattr(args, "nft_broker_socket", ""),
     )
 
 
@@ -1142,6 +1148,8 @@ def main() -> int:
         level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
     )
     args = parse_args()
+    if args.nft_broker_socket and not args.coordinated_firewall:
+        raise ValueError("nft broker requires coordinated firewall")
     if args.coordinated_firewall and args.skip_firewall_sync:
         raise ValueError("coordinated firewall cannot be disabled with --skip-firewall-sync")
     config = build_config(args)
