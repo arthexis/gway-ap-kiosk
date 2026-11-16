@@ -8,6 +8,7 @@
   vars:
     portal_project_root: "{{ playbook_dir }}/../.."
     portal_revision: "{{ lookup('pipe', 'git -C ' ~ portal_project_root ~ ' rev-parse HEAD') | trim }}"
+    portal_operator_uid: "{{ lookup('pipe', 'id -u arthe') | trim }}"
     portal_release_root: /opt/gway-ap-kiosk/portal/candidates
     portal_candidate_dir: "{{ portal_release_root }}/{{ portal_revision }}"
   tasks:
@@ -34,15 +35,21 @@
         - "{{ portal_candidate_dir }}/config/data"
         - "{{ portal_candidate_dir }}/config/data/ap_portal"
 
-    - name: Stage stdlib-only Python portal executable
+    - name: Stage Python portal and restricted broker modules
       become: true
       ansible.builtin.copy:
-        src: "{{ portal_project_root }}/scripts/ap_portal_server.py"
-        dest: "{{ portal_candidate_dir }}/scripts/ap_portal_server.py"
+        src: "{{ portal_project_root }}/scripts/{{ item }}"
+        dest: "{{ portal_candidate_dir }}/scripts/{{ item }}"
         owner: root
         group: root
         mode: "0755"
         force: false
+      loop:
+        - ap_portal_server.py
+        - portal_firewall_coordinator.py
+        - portal_nft_client.py
+        - portal_nft_broker.py
+        - portal_grant_intent.py
 
     - name: Stage portal assets without touching the live Nginx site
       become: true
@@ -68,6 +75,16 @@
         mode: "0644"
         force: false
 
+    - name: Stage restricted broker service candidate, never activate
+      become: true
+      ansible.builtin.template:
+        src: "{{ portal_project_root }}/ansible/templates/gway-ap-nft-broker-candidate.service.j2"
+        dest: "{{ portal_candidate_dir }}/gway-ap-nft-broker.service"
+        owner: root
+        group: root
+        mode: "0644"
+        force: false
+
     - name: Stage Nginx location candidate, never enable it
       become: true
       ansible.builtin.copy:
@@ -87,6 +104,10 @@
           - "{{ portal_candidate_dir }}/{{ item }}"
       loop:
         - scripts/ap_portal_server.py
+        - scripts/portal_firewall_coordinator.py
+        - scripts/portal_nft_client.py
+        - scripts/portal_nft_broker.py
+        - scripts/portal_grant_intent.py
         - config/data/ap_portal/index.html
         - config/data/ap_portal/app.css
         - config/data/ap_portal/app.js
