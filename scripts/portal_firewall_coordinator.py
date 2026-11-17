@@ -99,13 +99,25 @@ class NftGrantCoordinator:
                 if list(expr[-1]) != [verdict]:
                     raise ValueError("unexpected captive verdict")
                 if index < 3:
-                    expected_set = expected_sets[index]
-                    set_match = json.dumps(expr[1:-1], sort_keys=True)
-                    if ("@" + expected_set) not in set_match:
-                        raise ValueError("missing captive allowlist match")
-                    if index in (1, 2) and not (
-                        '"tcp"' in set_match or '"th"' in set_match):
-                        raise ValueError("preauth exception lacks TCP restriction")
+                    required_set = ("authorized_macs", "preauth_ipv4", "preauth_ipv6")[index]
+                    if len(expr) != (3 if index == 0 else 4):
+                        raise ValueError("unexpected captive exception shape")
+                    match = expr[1].get("match")
+                    expected_source = {"protocol": "ether", "field": "saddr"}
+                    expected_destination = {"protocol": "ip" if index == 1 else "ip6",
+                                            "field": "daddr"}
+                    if not isinstance(match, dict) or match.get("op") != "==" or (
+                            match.get("left") != {"payload": expected_source if index == 0
+                                                  else expected_destination}) or (
+                            match.get("right") != {"set": "@" + required_set}):
+                        raise ValueError("untrusted captive exception")
+                    if index > 0:
+                        port = expr[2].get("match")
+                        if (not isinstance(port, dict) or port.get("op") != "==" or
+                                port.get("left") != {"payload": {
+                                    "protocol": "tcp", "field": "dport"}} or
+                                port.get("right") != {"set": [80, 443]}):
+                            raise ValueError("widened pre-auth destination ports")
                 elif len(expr) != 2:
                     raise ValueError("nonterminal or conditional captive drop")
         except (KeyError, ValueError, TypeError) as exc:
