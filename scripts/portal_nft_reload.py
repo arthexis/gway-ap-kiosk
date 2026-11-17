@@ -82,7 +82,7 @@ def main() -> int:
         raise SystemExit("reload requires root")
     try:
         reload_with_reconcile()
-    except (OSError, ReloadError, subprocess.TimeoutExpired, ValueError):
+    except (OSError, ReloadError, subprocess.TimeoutExpired, ValueError) as exc:
         raise SystemExit("AP nftables reload incomplete; hold access and inspect receipt")
     return 0
 
