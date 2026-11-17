@@ -41,7 +41,7 @@ def rule(index):
         expr = [interface, {"match": {"op": "==",
                             "left": {"payload": {"protocol": "ether" if index == 0 else ("ip" if index == 1 else "ip6"),
                                                   "field": "saddr" if index == 0 else "daddr"}},
-                            "right": {"set": "@" + name}}}]
+                            "right": "@" + name}}]
         if index in (1, 2):
             expr.append({"match": {"op": "==",
                         "left": {"payload": {"protocol": "tcp", "field": "dport"}},
@@ -289,3 +289,24 @@ def test_mandatory_mode_rejects_absent_broker(tmp_path):
         mandatory_registration=True)
     with pytest.raises(portal.FirewallSyncError, match="requires coordinated broker"):
         portal.PortalState(config)
+
+
+def test_kernel_nft_1_0_6_emits_literal_set_reference():
+    # Observed from nft -j list chain in a real isolated netns on gway-001.
+    parsed = json.loads(captive_chain())
+    assert parsed["nftables"][1]["rule"]["expr"][1]["match"]["right"] == "@authorized_macs"
+    assert parsed["nftables"][2]["rule"]["expr"][1]["match"]["right"] == "@preauth_ipv4"
+    assert parsed["nftables"][3]["rule"]["expr"][1]["match"]["right"] == "@preauth_ipv6"
+    f = FakeNft()
+    nft.NftGrantCoordinator(run=f, require_captive=True).verify_captive()
+
+
+def test_reject_nonliteral_or_different_nft_set_reference():
+    for forged in ({"set": "@authorized_macs"}, "@wrong_set", "", None):
+        f = FakeNft()
+        raw = json.loads(f.chain)
+        raw["nftables"][1]["rule"]["expr"][1]["match"]["right"] = forged
+        f.chain = json.dumps(raw)
+        with pytest.raises(nft.CoordinationError, match="captive"):
+            nft.NftGrantCoordinator(run=f, require_captive=True).add({MAC})
+        assert f.batches == []
