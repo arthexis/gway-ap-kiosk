@@ -420,3 +420,44 @@ writer exclusivity, independent grants provenance, safe rollback and
 physical AP/uplink/SSH/WireGuard/OCPP acceptance remain mandatory; this
 offline increment does not complete them. No production service, nftables
 hook or AP configuration is changed by merging the PR.
+
+
+## Stage 6 — guarded existing-host activation (opt-in only)
+
+Normal deploy.sh and stage-portal.yml remain nonactivating. The separate
+ansible/playbooks/activate-portal.yml requires an exact 40-character
+portal_revision and three explicit approvals: portal_cutover_approved,
+portal_maintenance_window, and portal_rollback_operator_ready. It refuses
+hosts other than gway-001. Merging this PR is NOT rollout authorization.
+
+Preconditions: clean, matching Git SHA and staged modules; root-owned
+cutover contract; clean authorization.pending; private migrated state under
+gwayap; static/live host-security grant parity; existing valid Nginx proxy;
+root-owned private backup parent; no foreign occupant of candidate paths.
+Legacy MAC authorization alone does not grant forwarded Internet.
+
+The playbook creates an exclusive private backup of the old nftables.conf
+and live nft evidence, prepares a deterministic boot policy, checks nft
+syntax before writes, then appends owned includes AFTER flush ruleset for
+/etc/nftables.d/host-security.nft and gway-ap-captive.nft. It applies only
+the portal table in-memory without restarting NetworkManager or host_security.
+Broker, reconciler and portal start in a reviewed dependency order.
+
+At nftables reload, the new script shares the broker writer lock, compares
+live host grants against the owner-managed static source plus provable
+consent-backed portal additions, refuses unknown grants, then reloads
+and queues reconciliation. Host-security restarts trigger reconciler too.
+No native nftables stop behavior is altered.
+
+After direct and proxied health checks, a sanitized private receipt is saved.
+On failure, Ansible rescue stops candidate services, removes its approval
+marker, restores the original boot file and removes only its own files.
+The portal-owned in-memory nft table is removed only if no new consent
+appeared; otherwise it remains to prevent an unreviewed fail-open release.
+Partial compensation or crash needs operator recovery, never auto-clear
+UNCERTAIN. Do not claim general transactional rollback.
+
+Idempotent reruns require the same revision, live captive chain, broker and
+Nginx health. Real restart/reboot and unauthorized/registered Wi-Fi clients,
+SSH, uplink, WireGuard and OCPP must be tested separately before #31 closes.
+Do not retire old artifacts on CI evidence alone.
