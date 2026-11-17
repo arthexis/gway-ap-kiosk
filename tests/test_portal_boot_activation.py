@@ -233,3 +233,30 @@ def test_reload_accepts_only_durable_portal_delta(tmp_path, monkeypatch):
     runner = DynamicFake()
     reload.reload_with_reconcile(lock=lock, root_uid=os.getuid(), runner=runner)
     assert runner.calls[-1] == ["systemctl", "--no-block", "start", reload.RECONCILER]
+
+
+def test_activation_is_strictly_gated_and_backup_precedes_every_live_write():
+    import yaml
+    spec = yaml.safe_load((ROOT / "ansible/playbooks/activate-portal.yml").read_text())
+    tasks = spec[0]["tasks"]
+    main = next(x for x in tasks if x["name"] ==
+                "First activation, only when no marker was installed")
+    guarded = next(x for x in main["block"] if x["name"] ==
+                   "Apply guarded activation with private backup and automatic recovery")
+    names = [x["name"] for x in guarded["block"]]
+    backup_idx = names.index("Capture original boot policy without changing it")
+    evidence_idx = names.index("Preserve independent live firewall evidence in private receipt")
+    apply_idx = names.index("Add only the portal-owned captive table without flushing other tables")
+    approve_idx = names.index("Create approval marker only after strict live nft verification")
+    start_idx = names.index("Start narrowly scoped root broker")
+    assert backup_idx < evidence_idx < apply_idx < approve_idx < start_idx
+    assert any(x["name"] == "Validate combined policy before touching host nft files"
+               for x in guarded["block"][:apply_idx])
+    rescues = [x["name"] for x in guarded["rescue"]]
+    assert rescues.index("Stop candidate portal and broker first") < rescues.index(
+        "Restore exact original boot policy, never flush live host nft")
+    assert rescues.index("Check if any new consent arrived during cutover") < rescues.index(
+        "Remove only our in-memory captive table if no consent changed")
+    assert "portal_cutover_approved | default(false) | bool" in str(spec)
+    assert "portal_rollback_operator_ready | default(false) | bool" in str(spec)
+    assert "state: restarted" not in str(spec)
