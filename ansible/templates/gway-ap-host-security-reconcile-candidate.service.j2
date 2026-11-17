@@ -1,7 +1,7 @@
 [Unit]
 Description=Reconcile registered AP grants after host_security reconstruction (candidate only)
 ConditionPathExists=/etc/gway-ap-kiosk/portal-activation-approved
-After=host-security-firewall.service gway-ap-nft-broker.service
+After=nftables.service host-security-firewall.service gway-ap-nft-broker.service
 Requires=gway-ap-nft-broker.service
 
 [Service]
