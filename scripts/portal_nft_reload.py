@@ -41,6 +41,16 @@ def reload_with_reconcile(*, lock: Path = Path(BROKER_LOCK),
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise ReloadError("another firewall writer active") from exc
+        # Refuse the destructive flush if an independent writer has added
+        # host grants not yet represented in its persistent owned source.
+        from portal_host_grants import compare_source_and_live, check_file
+        live = runner(["nft", "-j", "list", "set", "inet",
+                       "host_security", "ap_allowed_macs"],
+                      timeout=8, capture_output=True, check=False)
+        _check(live)
+        compare_source_and_live(
+            check_file(Path("/etc/nftables.d/host-security.nft")),
+            live.stdout)
         _check(runner(["nft", "-c", "-f", config], timeout=15,
                       capture_output=True, check=False))
         _check(runner(["nft", "-f", config], timeout=15,
@@ -57,7 +67,7 @@ def main() -> int:
         raise SystemExit("reload requires root")
     try:
         reload_with_reconcile()
-    except (OSError, ReloadError, subprocess.TimeoutExpired):
+    except (OSError, ReloadError, subprocess.TimeoutExpired, ValueError):
         raise SystemExit("AP nftables reload incomplete; hold access and inspect receipt")
     return 0
 
