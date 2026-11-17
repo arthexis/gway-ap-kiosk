@@ -204,7 +204,7 @@ def run_server(*, socket_path: Path, lock_path: Path, uid: int, state_dir: Path 
                 with conn:
                     conn.settimeout(3)
                     try:
-                        serve_request(conn, uid=uid, coordinator=NftGrantCoordinator(),
+                        serve_request(conn, uid=uid, coordinator=NftGrantCoordinator(require_captive=True),
                                       lock_path=lock_path, state_dir=state_dir,
                                       require_consent=True)
                     except (BrokerRejected, CoordinationError, OSError, ValueError):
