@@ -109,7 +109,7 @@ class NftGrantCoordinator:
                     if not isinstance(match, dict) or match.get("op") != "==" or (
                             match.get("left") != {"payload": expected_source if index == 0
                                                   else expected_destination}) or (
-                            match.get("right") != {"set": "@" + required_set}):
+                            match.get("right") != "@" + required_set):
                         raise ValueError("untrusted captive exception")
                     if index > 0:
                         port = expr[2].get("match")
