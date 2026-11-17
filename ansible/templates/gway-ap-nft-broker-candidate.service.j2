@@ -1,0 +1,29 @@
+[Unit]
+Description=GWAY AP nft authorization broker candidate (NOT ACTIVE)
+ConditionPathExists=/etc/gway-ap-kiosk/portal-activation-approved
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+RuntimeDirectory=gway-ap-nft
+RuntimeDirectoryMode=0711
+ExecStart=/usr/bin/python3 {{ portal_candidate_dir }}/scripts/portal_nft_broker.py --socket /run/gway-ap-nft/broker.sock --lock /run/gway-ap-nft/coord.lock --uid {{ portal_operator_uid }} --state-dir /var/lib/gway-ap-kiosk/portal --cutover-contract /etc/gway-ap-kiosk/portal-writer-cutover.json
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadOnlyPaths=/var/lib/gway-ap-kiosk/portal
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
