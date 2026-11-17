@@ -127,7 +127,8 @@ def verify_persisted_grants(state_dir: Path, requested: set[str], *, uid: int) -
         os.close(directory_fd)
 
 
-def serve_request(conn, *, uid: int, coordinator, lock_path: Path, state_dir: Path | None = None) -> None:
+def serve_request(conn, *, uid: int, coordinator, lock_path: Path, state_dir: Path | None = None,
+                  lock_owner_uid: int = 0) -> None:
     authorize_peer(conn, allowed_uid=uid)
     message = bytearray()
     # Read until clean EOF, not just the first newline: reject second frames
@@ -146,8 +147,14 @@ def serve_request(conn, *, uid: int, coordinator, lock_path: Path, state_dir: Pa
     # does not deadlock with the portal holding its own lock over the RPC.
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            raise BrokerRejected("invalid broker lock")
+        lock_meta = os.fstat(fd)
+        # The root broker must not trust a pre-planted lock owned by the
+        # portal UID or an independently mutable/hard-linked inode.
+        if (not stat.S_ISREG(lock_meta.st_mode)
+                or lock_meta.st_uid != lock_owner_uid
+                or lock_meta.st_mode & 0o077
+                or lock_meta.st_nlink != 1):
+            raise BrokerRejected("untrusted broker lock")
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
