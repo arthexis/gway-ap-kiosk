@@ -42,7 +42,10 @@ def test_broker_candidate_is_unactivated_and_root_capability_isolated():
         assert path in playbook
     assert "User=root" in unit
     assert "CapabilityBoundingSet=CAP_NET_ADMIN" in unit
-    assert "RuntimeDirectoryMode=0711" in unit
+    assert "RuntimeDirectoryMode=0710" in unit
+    assert "Group=gwayap" in unit
+    assert "CapabilityBoundingSet=CAP_NET_ADMIN" in unit
+    assert "CAP_CHOWN" not in unit
     assert "NoNewPrivileges=yes" in unit
     assert "--uid {{ portal_operator_uid }}" in unit
     assert "--state-dir /var/lib/gway-ap-kiosk/portal" in unit

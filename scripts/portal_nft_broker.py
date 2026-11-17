@@ -9,6 +9,7 @@ import argparse
 import fcntl
 import json
 import os
+import pwd
 import socket
 import stat
 import struct
@@ -182,6 +183,28 @@ def serve_request(conn, *, uid: int, coordinator, lock_path: Path, state_dir: Pa
     conn.sendall(b'{"ok":true}\n')
 
 
+def protect_bound_socket(path: Path, *, peer_uid: int, root_uid: int = 0) -> None:
+    """Use root:gwayap ownership, never CAP_CHOWN.
+
+    The systemd broker is root with Group=gwayap. AF_UNIX SO_PEERCRED
+    still authorizes ONLY the exact peer UID, not arbitrary group members.
+    """
+    try:
+        peer_group = pwd.getpwuid(peer_uid).pw_gid
+        meta = path.lstat()
+    except (KeyError, OSError) as exc:
+        raise BrokerRejected("socket peer group or path unavailable") from exc
+    if (root_uid != meta.st_uid or root_uid == peer_uid or peer_group == 0
+            or not stat.S_ISSOCK(meta.st_mode) or meta.st_gid != peer_group):
+        raise BrokerRejected("unsafe broker socket ownership")
+    os.chmod(path, 0o660)
+    checked = path.lstat()
+    if (not stat.S_ISSOCK(checked.st_mode) or checked.st_uid != root_uid
+            or checked.st_gid != peer_group
+            or stat.S_IMODE(checked.st_mode) != 0o660):
+        raise BrokerRejected("broker socket permissions changed")
+
+
 def run_server(*, socket_path: Path, lock_path: Path, uid: int, state_dir: Path | None = None, cutover_contract: Path | None = None) -> None:
     if os.geteuid() != 0 or uid <= 0:
         raise BrokerRejected("dedicated root broker and non-root peer required")
@@ -195,8 +218,11 @@ def run_server(*, socket_path: Path, lock_path: Path, uid: int, state_dir: Path 
         raise BrokerRejected("socket exists; refusing replacement")
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
         listener.bind(str(socket_path))
-        os.chown(socket_path, uid, -1)
-        os.chmod(socket_path, 0o600)  # restricted to configured peer UID
+        try:
+            protect_bound_socket(socket_path, peer_uid=uid)
+        except BaseException:
+            socket_path.unlink(missing_ok=True)
+            raise
         listener.listen(4)
         try:
             while True:

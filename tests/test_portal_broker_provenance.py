@@ -105,3 +105,39 @@ def test_racing_allowlist_replacement_is_rejected(tmp_path, monkeypatch):
     with pytest.raises(module.BrokerRejected, match="changed"):
         module.verify_persisted_grants(directory, {MAC}, uid=os.getuid())
     assert triggered
+
+
+def test_broker_socket_protection_needs_no_chown_capability(tmp_path, monkeypatch):
+    import socket
+    import stat
+    from types import SimpleNamespace
+    sock_path = tmp_path / "broker.sock"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.bind(str(sock_path))
+        monkeypatch.setattr(module.pwd, "getpwuid",
+                            lambda uid: SimpleNamespace(pw_gid=os.getgid()))
+        monkeypatch.setattr(module.os, "chown",
+                            lambda *args: pytest.fail("CAP_CHOWN must not be needed"))
+        module.protect_bound_socket(
+            sock_path, peer_uid=os.getuid() + 1, root_uid=os.getuid())
+        meta = sock_path.lstat()
+        assert stat.S_ISSOCK(meta.st_mode)
+        assert stat.S_IMODE(meta.st_mode) == 0o660
+
+
+def test_broker_socket_rejects_wrong_group_or_same_uid(tmp_path, monkeypatch):
+    import socket
+    from types import SimpleNamespace
+    sock_path = tmp_path / "broker.sock"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+        listener.bind(str(sock_path))
+        monkeypatch.setattr(module.pwd, "getpwuid",
+                            lambda uid: SimpleNamespace(pw_gid=os.getgid() + 1))
+        with pytest.raises(module.BrokerRejected, match="ownership"):
+            module.protect_bound_socket(sock_path, peer_uid=os.getuid() + 1,
+                                        root_uid=os.getuid())
+        monkeypatch.setattr(module.pwd, "getpwuid",
+                            lambda uid: SimpleNamespace(pw_gid=os.getgid()))
+        with pytest.raises(module.BrokerRejected, match="ownership"):
+            module.protect_bound_socket(sock_path, peer_uid=os.getuid(),
+                                        root_uid=os.getuid())
