@@ -23,6 +23,21 @@ class ReloadError(RuntimeError):
     pass
 
 
+def dynamic_eligible() -> set[str]:
+    """Grant additions represented by persisted, explicitly consenting users."""
+    from portal_authorization_reconcile import load_macs
+    from portal_captive_policy import eligible_grants, read_consented_macs
+    from portal_grant_intent import GrantIntent
+    path = Path("/var/lib/gway-ap-kiosk/portal")
+    if path.is_symlink() or not path.is_dir() or path.stat().st_mode & 0o077:
+        raise ReloadError("unsafe private portal state")
+    GrantIntent(path).ensure_clean()
+    authorized = load_macs(path / "authorized_macs.txt")
+    trusted = load_macs(path / "trusted_macs.txt")
+    consented = read_consented_macs(path / "consents.jsonl")
+    return eligible_grants(authorized, trusted, consented)
+
+
 def _check(result):
     if result.returncode:
         raise ReloadError("nftables reload/reconciliation failed")
@@ -50,7 +65,7 @@ def reload_with_reconcile(*, lock: Path = Path(BROKER_LOCK),
         _check(live)
         compare_source_and_live(
             check_file(Path("/etc/nftables.d/host-security.nft")),
-            live.stdout)
+            live.stdout, consented_dynamic=dynamic_eligible())
         _check(runner(["nft", "-c", "-f", config], timeout=15,
                       capture_output=True, check=False))
         _check(runner(["nft", "-f", config], timeout=15,
