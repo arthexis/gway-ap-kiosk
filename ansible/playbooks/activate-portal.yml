@@ -143,6 +143,21 @@
               - not portal_existing_marker.stat.islnk
               - portal_existing_marker.stat.pw_name == 'root'
               - portal_marker_bytes.content | b64decode | trim == portal_revision
+        - name: Check active persistent boot and both nft grant sets on rerun
+          become: true
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/python3
+              - -c
+              - |
+                import sys
+                sys.path.insert(0, sys.argv[1])
+                from portal_firewall_coordinator import NftGrantCoordinator
+                NftGrantCoordinator(require_captive=True).snapshot()
+              - "{{ portal_candidate_dir }}/scripts"
+          changed_when: false
+          no_log: true
+
         - name: Verify already active portal and broker (idempotent rerun)
           become: true
           ansible.builtin.command:
@@ -158,7 +173,7 @@
           ansible.builtin.stat:
             path: "{{ item }}"
             follow: false
-          loop: "{{ [portal_captive_conf] + portal_installed | map(attribute='dest') | list }}"
+          loop: "{{ [portal_captive_conf] + (portal_installed | map(attribute='dest') | list) }}"
           register: portal_collision_paths
 
         - name: Refuse replacing any existing service, drop-in or captive table owner
@@ -352,6 +367,16 @@
               changed_when: false
               no_log: true
 
+            - name: Ensure private approval parent is a real root directory
+              become: true
+              ansible.builtin.file:
+                path: /etc/gway-ap-kiosk
+                owner: root
+                group: root
+                mode: '0755'
+                state: directory
+                follow: false
+
             - name: Create approval marker only after strict live nft verification
               become: true
               ansible.builtin.copy:
@@ -440,7 +465,7 @@
               ansible.builtin.file:
                 path: "{{ item }}"
                 state: absent
-              loop: "{{ [portal_captive_conf] + portal_installed | map(attribute='dest') | list }}"
+              loop: "{{ [portal_captive_conf] + (portal_installed | map(attribute='dest') | list) }}"
               failed_when: false
 
             - name: Reload systemd metadata after candidate rollback
