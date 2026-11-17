@@ -588,13 +588,15 @@ class PortalState:
                     # Even a previously authorized device can be missing a grant
                     # after service restart; reconcile both sets additively.
                     firewall_attempted = True
-                    eligible = self._effective_authorized_macs() if not self.config.mandatory_registration else (
-                        __import__("portal_captive_policy").eligible_grants(
+                    if self.config.mandatory_registration:
+                        from portal_captive_policy import eligible_grants, read_consented_macs
+                        eligible = eligible_grants(
                             next_authorized, self._trusted,
-                            __import__("portal_captive_policy").read_consented_macs(
-                                self.config.consents_path)))
-                    if not eligible or mac_address not in eligible:
-                        raise FirewallSyncError("consent is not eligible for captive grant")
+                            read_consented_macs(self.config.consents_path))
+                        if mac_address not in eligible:
+                            raise FirewallSyncError("consent is not eligible for captive grant")
+                    else:
+                        eligible = next_authorized | self._trusted
                     self._coordinator().add(eligible)
             except Exception as failure:
                 # A failed nft batch is atomic. If any compensation fails,
