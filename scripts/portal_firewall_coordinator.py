@@ -89,7 +89,7 @@ class NftGrantCoordinator:
                     rule.get("chain") != "forward"):
                     raise ValueError("unexpected captive rule location")
                 expr = rule.get("expr")
-                if not isinstance(expr, list) or len(expr) < 3:
+                if not isinstance(expr, list) or len(expr) < (2 if index == 3 else 3):
                     raise ValueError("incomplete captive rule")
                 gate = expr[0].get("match", {})
                 if gate != {"op": "==", "left": {"meta": {"key": "iifname"}},
