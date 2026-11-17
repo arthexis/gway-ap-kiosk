@@ -334,6 +334,13 @@ class ActivityRecorder:
         self.config.state_dir.mkdir(parents=True, exist_ok=True)
 
     def record(self, event_type: str, **fields: Any) -> dict[str, Any]:
+        # Attribution applies only to portal-observed events, not forwarded
+        # traffic; never infer a person from an IP address alone.
+        mac_address = fields.get("mac_address")
+        if mac_address:
+            from portal_attribution import latest_device_attribution
+            fields = {**latest_device_attribution(self.read_consents(), mac_address),
+                      **fields}
         event = {
             "observed_at": _utc_now(),
             "event_type": event_type,
@@ -403,6 +410,9 @@ class ActivityRecorder:
             entry["email"] = consent.get("email")
             entry["accepted_at"] = consent.get("accepted_at")
             entry["last_ip_address"] = consent.get("ip_address")
+            for identity_key in ("user_id", "device_id", "session_id"):
+                if consent.get(identity_key):
+                    entry[identity_key] = consent[identity_key]
 
         for event in self.read_events(limit=limit):
             mac = str(event.get("mac_address") or "").lower()
@@ -414,6 +424,9 @@ class ActivityRecorder:
                 entry["last_ip_address"] = event.get("ip_address")
             entry["last_event_at"] = event.get("observed_at")
             entry["last_event_type"] = event.get("event_type")
+            for identity_key in ("user_id", "device_id", "session_id"):
+                if event.get(identity_key):
+                    entry[identity_key] = event[identity_key]
             entry["event_count"] = int(entry.get("event_count") or 0) + 1
             entry.setdefault("authorized", key in effective_authorized)
             if mac:
@@ -743,6 +756,10 @@ class PortalState:
         }
 
         with self._lock:
+            from portal_attribution import registration_ids
+            record.update(registration_ids(self.activity.read_consents(),
+                                           email=normalized_email,
+                                           mac_address=mac_address))
             if self.config.coordinated_firewall:
                 return self._subscribe_coordinated(
                     record=record, mac_address=mac_address,
