@@ -46,7 +46,16 @@ def consented_macs(records):
     result = set()
     for record in records:
         if not valid_record(record):
-            raise CoordinationError("legacy or invalid consent requires review")
+            # Historical consent is preserved for audit, but its lack of
+            # attribution IDs never authorizes Internet automatically.
+            if (isinstance(record, dict)
+                    and record.get("accept_terms") is True
+                    and isinstance(record.get("mac_address"), str)
+                    and MAC.fullmatch(record["mac_address"]) is not None
+                    and not any(key in record for key in
+                                ("user_id", "device_id", "session_id"))):
+                continue
+            raise CoordinationError("invalid consent record requires review")
         result.add(record["mac_address"].lower())
     return result
 
