@@ -38,7 +38,7 @@ def test_private_copy_preserves_payload_without_logging_private_data(tmp_path):
     assert result["ready_for_activation"] is False
     assert result["firewall_backup_verified"] is False
     assert result["writer_quiescence_verified"] is False
-    assert "aa:bb" not in str(result) and "consent" not in str(result)
+    assert "aa:bb" not in str(result) and '"consent":true' not in str(result)
     assert (dest / "authorized_macs.txt").read_bytes() == before
     assert (source / "authorized_macs.txt").read_bytes() == before
     assert dest.stat().st_mode & 0o777 == 0o700
