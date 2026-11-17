@@ -123,6 +123,7 @@ def test_reload_serializes_and_queues_reconciliation(tmp_path, monkeypatch):
     lock.write_bytes(b"")
     lock.chmod(0o600)
     monkeypatch.setattr(reload, "check_file", lambda _: host_source(MAC))
+    monkeypatch.setattr(reload, "dynamic_eligible", lambda: set())
     fake = FakeReload()
     reload.reload_with_reconcile(lock=lock, root_uid=os.getuid(), runner=fake)
     assert fake.calls == [
@@ -143,6 +144,7 @@ def test_reload_propagates_failures(tmp_path, monkeypatch, fail_on):
     lock = tmp_path / "lock"
     lock.touch(mode=0o600)
     monkeypatch.setattr(reload, "check_file", lambda _: host_source(MAC))
+    monkeypatch.setattr(reload, "dynamic_eligible", lambda: set())
     runner = FakeReload(fail_on=fail_on)
     with pytest.raises(reload.ReloadError):
         reload.reload_with_reconcile(lock=lock, root_uid=os.getuid(), runner=runner)
@@ -154,6 +156,7 @@ def test_reload_refuses_independent_grant_drift_before_flush(tmp_path, monkeypat
     lock = tmp_path / "lock"
     lock.touch(mode=0o600)
     monkeypatch.setattr(reload, "check_file", lambda _: host_source(FOREIGN))
+    monkeypatch.setattr(reload, "dynamic_eligible", lambda: set())
     runner = FakeReload()
     with pytest.raises(grants.HostGrantError):
         reload.reload_with_reconcile(lock=lock, root_uid=os.getuid(), runner=runner)
@@ -201,3 +204,32 @@ def test_systemd_reload_and_boot_are_explicitly_reconciled():
                     "gway-ap-nft-broker-candidate.service.j2"):
         unit = (ROOT / "ansible/templates" / service).read_text()
         assert "host-security-firewall.service" in unit
+
+
+def test_portal_consent_delta_survives_proven_reload():
+    assert grants.compare_source_and_live(host_source(FOREIGN),
+        host_live(FOREIGN, MAC), consented_dynamic={MAC}) == 1
+    with pytest.raises(grants.HostGrantError):
+        grants.compare_source_and_live(host_source(FOREIGN),
+            host_live(FOREIGN, MAC), consented_dynamic=set())
+    with pytest.raises(grants.HostGrantError):
+        grants.compare_source_and_live(host_source(FOREIGN),
+            host_live(MAC), consented_dynamic={MAC})
+
+
+def test_reload_accepts_only_durable_portal_delta(tmp_path, monkeypatch):
+    lock = tmp_path / "lock"
+    lock.write_bytes(b"")
+    lock.chmod(0o600)
+    monkeypatch.setattr(reload, "check_file", lambda _: host_source(FOREIGN))
+    monkeypatch.setattr(reload, "dynamic_eligible", lambda: {MAC})
+
+    class DynamicFake(FakeReload):
+        def __call__(self, argv, **kwargs):
+            result = super().__call__(argv, **kwargs)
+            if argv[:3] == ["nft", "-j", "list"]:
+                result.stdout = host_live(FOREIGN, MAC)
+            return result
+    runner = DynamicFake()
+    reload.reload_with_reconcile(lock=lock, root_uid=os.getuid(), runner=runner)
+    assert runner.calls[-1] == ["systemctl", "--no-block", "start", reload.RECONCILER]
