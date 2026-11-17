@@ -1,0 +1,488 @@
+---
+# Existing-host cutover only. Not called from deploy.sh or stage-portal.yml.
+# Fail closed until all operator and runtime assertions are independently met.
+# A rescue never flushes all host nft tables or edits AP/NetworkManager routes.
+- name: Explicitly approved and reversible AP portal activation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    portal_source_root: "{{ playbook_dir }}/../.."
+    portal_candidate_dir: "/opt/gway-ap-kiosk/portal/candidates/{{ portal_revision | default('UNSPECIFIED') }}"
+    portal_approval_path: /etc/gway-ap-kiosk/portal-activation-approved
+    portal_contract_path: /etc/gway-ap-kiosk/portal-writer-cutover.json
+    portal_state_dir: /var/lib/gway-ap-kiosk/portal
+    portal_backup_parent: /var/backups/gway-ap-kiosk
+    portal_boot_conf: /etc/nftables.conf
+    portal_captive_conf: /etc/nftables.d/gway-ap-captive.nft
+    portal_installed:
+      - { src: gway-ap-portal.service, dest: /etc/systemd/system/gway-ap-portal.service }
+      - { src: gway-ap-nft-broker.service, dest: /etc/systemd/system/gway-ap-nft-broker.service }
+      - { src: gway-ap-host-security-reconcile.service, dest: /etc/systemd/system/gway-ap-host-security-reconcile.service }
+      - { src: 90-gway-ap-reconcile.conf, dest: /etc/systemd/system/host-security-firewall.service.d/90-gway-ap-reconcile.conf }
+      - { src: 90-gway-ap-nft-reconcile.conf, dest: /etc/systemd/system/nftables.service.d/90-gway-ap-nft-reconcile.conf }
+  tasks:
+    - name: Require intentional existing-host activation
+      ansible.builtin.assert:
+        that:
+          - portal_cutover_approved | default(false) | bool
+          - portal_maintenance_window | default(false) | bool
+          - portal_rollback_operator_ready | default(false) | bool
+          - portal_revision | default('') is match('^[0-9a-f]{40}$')
+          - lookup('pipe', 'hostname -s') == 'gway-001'
+        fail_msg: "Refusing unapproved, unpinned or non-canary AP cutover"
+
+    - name: Confirm local Git revision equals requested immutable candidate
+      ansible.builtin.command:
+        argv: [git, -C, "{{ portal_source_root }}", rev-parse, HEAD]
+      register: portal_git_head
+      changed_when: false
+
+    - name: Reject unrelated checkout
+      ansible.builtin.assert:
+        that: portal_git_head.stdout == portal_revision
+
+    - name: Reject modified candidate source
+      ansible.builtin.command:
+        argv: [git, -C, "{{ portal_source_root }}", diff, --quiet, HEAD, --,
+               scripts, ansible/playbooks, ansible/templates, config/data/ap_portal]
+      changed_when: false
+
+    - name: Verify all staged modules match checked-out exact revision
+      ansible.builtin.command:
+        argv: [cmp, -s, "{{ portal_source_root }}/scripts/{{ item }}",
+               "{{ portal_candidate_dir }}/scripts/{{ item }}"]
+      loop:
+        - ap_portal_server.py
+        - portal_firewall_coordinator.py
+        - portal_nft_client.py
+        - portal_nft_broker.py
+        - portal_grant_intent.py
+        - portal_cutover_contract.py
+        - portal_attribution.py
+        - portal_captive_policy.py
+        - portal_authorization_reconcile.py
+        - portal_boot_rules.py
+        - portal_host_grants.py
+        - portal_nft_reload.py
+      changed_when: false
+
+    - name: Require privately owned root cutover assertions
+      become: true
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - |
+            import sys
+            sys.path.insert(0, sys.argv[1])
+            from portal_cutover_contract import check_contract
+            check_contract(sys.argv[2])
+          - "{{ portal_candidate_dir }}/scripts"
+          - "{{ portal_contract_path }}"
+      changed_when: false
+      no_log: true
+
+    - name: Require no unresolved authorization transaction
+      become: true
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - -c
+          - |
+            import sys
+            sys.path.insert(0, sys.argv[1])
+            from portal_grant_intent import GrantIntent
+            from pathlib import Path
+            GrantIntent(Path(sys.argv[2])).ensure_clean()
+          - "{{ portal_candidate_dir }}/scripts"
+          - "{{ portal_state_dir }}"
+      changed_when: false
+
+    - name: Prove independent live grants are already backed by their host source
+      become: true
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, "{{ portal_candidate_dir }}/scripts/portal_host_grants.py",
+               --host-source, /etc/nftables.d/host-security.nft]
+      register: portal_grant_proof
+      changed_when: false
+      no_log: true
+
+    - name: Validate unchanged Nginx site and its existing local portal upstream
+      become: true
+      ansible.builtin.command:
+        argv: [grep, -F, "proxy_pass http://127.0.0.1:9080;",
+               /etc/nginx/sites-enabled/arthexis.conf]
+      changed_when: false
+
+    - name: Confirm Nginx configuration parses without a reload
+      become: true
+      ansible.builtin.command:
+        argv: [nginx, -t]
+      changed_when: false
+
+    - name: Inspect existing approval marker without following links
+      become: true
+      ansible.builtin.stat:
+        path: "{{ portal_approval_path }}"
+        follow: false
+      register: portal_existing_marker
+
+    - name: Existing deployment is accepted only for the exact same revision
+      when: portal_existing_marker.stat.exists
+      block:
+        - name: Read existing root-owned activation marker
+          become: true
+          ansible.builtin.slurp:
+            src: "{{ portal_approval_path }}"
+          register: portal_marker_bytes
+          no_log: true
+        - name: Reject marker mismatch or symlink
+          ansible.builtin.assert:
+            that:
+              - not portal_existing_marker.stat.islnk
+              - portal_existing_marker.stat.pw_name == 'root'
+              - portal_marker_bytes.content | b64decode | trim == portal_revision
+        - name: Verify already active portal and broker (idempotent rerun)
+          become: true
+          ansible.builtin.command:
+            argv: [systemctl, is-active, --quiet, "{{ item }}"]
+          loop: [gway-ap-portal.service, gway-ap-nft-broker.service]
+          changed_when: false
+
+    - name: First activation, only when no marker was installed
+      when: not portal_existing_marker.stat.exists
+      block:
+        - name: Preflight existing managed path collisions
+          become: true
+          ansible.builtin.stat:
+            path: "{{ item }}"
+            follow: false
+          loop: "{{ [portal_captive_conf] + portal_installed | map(attribute='dest') | list }}"
+          register: portal_collision_paths
+
+        - name: Refuse replacing any existing service, drop-in or captive table owner
+          ansible.builtin.assert:
+            that:
+              - portal_collision_paths.results | selectattr('stat.exists') | list | length == 0
+
+        - name: Refuse adopting a pre-existing live captive table
+          become: true
+          ansible.builtin.command:
+            argv: [nft, list, table, inet, gway_ap_portal]
+          register: portal_preexisting_table
+          failed_when: portal_preexisting_table.rc == 0
+          changed_when: false
+
+        - name: Inspect private backup parent
+          become: true
+          ansible.builtin.stat:
+            path: "{{ portal_backup_parent }}"
+            follow: false
+          register: portal_backup_root_stat
+
+        - name: Require existing private root-owned backup parent
+          ansible.builtin.assert:
+            that:
+              - portal_backup_root_stat.stat.isdir
+              - not portal_backup_root_stat.stat.islnk
+              - portal_backup_root_stat.stat.pw_name == 'root'
+              - portal_backup_root_stat.stat.mode == '0700'
+
+        - name: Capture preactivation consent journal identity
+          become: true
+          ansible.builtin.stat:
+            path: "{{ portal_state_dir }}/consents.jsonl"
+            follow: false
+            checksum_algorithm: sha256
+            get_checksum: true
+          register: portal_consent_before
+          no_log: true
+
+        - name: Apply guarded activation with private backup and automatic recovery
+          block:
+            - name: Allocate private exclusive cutover receipt directory
+              become: true
+              ansible.builtin.tempfile:
+                state: directory
+                path: "{{ portal_backup_parent }}"
+                prefix: "issue31-activation-"
+              register: portal_backup
+
+            - name: Pin backup permissions to root only
+              become: true
+              ansible.builtin.file:
+                path: "{{ portal_backup.path }}"
+                owner: root
+                group: root
+                mode: '0700'
+                state: directory
+                follow: false
+
+            - name: Capture original boot policy without changing it
+              become: true
+              ansible.builtin.copy:
+                src: "{{ portal_boot_conf }}"
+                dest: "{{ portal_backup.path }}/original-nftables.conf"
+                remote_src: true
+                owner: root
+                group: root
+                mode: '0600'
+                force: false
+
+            - name: Preserve independent live firewall evidence in private receipt
+              become: true
+              ansible.builtin.shell: >-
+                set -eu;
+                nft -j list ruleset > "{{ portal_backup.path }}/original-ruleset.json";
+                chmod 0600 "{{ portal_backup.path }}/original-ruleset.json"
+              args:
+                executable: /bin/sh
+              changed_when: true
+              no_log: true
+
+            - name: Produce boot, captive and isolated validation candidates
+              become: true
+              ansible.builtin.command:
+                argv:
+                  - /usr/bin/python3
+                  - "{{ portal_candidate_dir }}/scripts/portal_boot_rules.py"
+                  - --base
+                  - "{{ portal_boot_conf }}"
+                  - --host-source
+                  - /etc/nftables.d/host-security.nft
+                  - --out-boot
+                  - "{{ portal_backup.path }}/candidate-nftables.conf"
+                  - --out-portal
+                  - "{{ portal_backup.path }}/candidate-captive.nft"
+                  - --out-validation
+                  - "{{ portal_backup.path }}/candidate-validation.nft"
+              changed_when: true
+
+            - name: Validate combined policy before touching host nft files
+              become: true
+              ansible.builtin.command:
+                argv: [nft, -c, -f, "{{ portal_backup.path }}/candidate-validation.nft"]
+              changed_when: false
+
+            - name: Install managed captive fragment before adding boot includes
+              become: true
+              ansible.builtin.copy:
+                src: "{{ portal_backup.path }}/candidate-captive.nft"
+                dest: "{{ portal_captive_conf }}"
+                remote_src: true
+                owner: root
+                group: root
+                mode: '0644'
+                force: false
+
+            - name: Atomically install reversible nftables boot includes
+              become: true
+              ansible.builtin.copy:
+                src: "{{ portal_backup.path }}/candidate-nftables.conf"
+                dest: "{{ portal_boot_conf }}"
+                remote_src: true
+                owner: root
+                group: root
+                mode: '0644'
+
+            - name: Verify the actual persistent boot configuration
+              become: true
+              ansible.builtin.command:
+                argv: [nft, -c, -f, "{{ portal_boot_conf }}"]
+              changed_when: false
+
+            - name: Prepare systemd drop-in directories without touching other units
+              become: true
+              ansible.builtin.file:
+                path: "{{ item }}"
+                state: directory
+                owner: root
+                group: root
+                mode: '0755'
+                follow: false
+              loop:
+                - /etc/systemd/system/host-security-firewall.service.d
+                - /etc/systemd/system/nftables.service.d
+
+            - name: Install only the reviewed candidate service and reload hook files
+              become: true
+              ansible.builtin.copy:
+                src: "{{ portal_candidate_dir }}/{{ item.src }}"
+                dest: "{{ item.dest }}"
+                remote_src: true
+                owner: root
+                group: root
+                mode: '0644'
+                force: false
+              loop: "{{ portal_installed }}"
+
+            - name: Load systemd unit metadata without restarting active services
+              become: true
+              ansible.builtin.systemd_service:
+                daemon_reload: true
+
+            - name: Recheck independent grants immediately before captive apply
+              become: true
+              ansible.builtin.command:
+                argv: [/usr/bin/python3, "{{ portal_candidate_dir }}/scripts/portal_host_grants.py",
+                       --host-source, /etc/nftables.d/host-security.nft]
+              changed_when: false
+              no_log: true
+
+            - name: Add only the portal-owned captive table without flushing other tables
+              become: true
+              ansible.builtin.command:
+                argv: [nft, -f, "{{ portal_captive_conf }}"]
+              register: portal_table_applied
+              changed_when: true
+
+            - name: Verify both live grant sets and strict captive forward chain
+              become: true
+              ansible.builtin.command:
+                argv:
+                  - /usr/bin/python3
+                  - -c
+                  - |
+                    import sys
+                    sys.path.insert(0, sys.argv[1])
+                    from portal_firewall_coordinator import NftGrantCoordinator
+                    NftGrantCoordinator(require_captive=True).snapshot()
+                  - "{{ portal_candidate_dir }}/scripts"
+              changed_when: false
+              no_log: true
+
+            - name: Create approval marker only after strict live nft verification
+              become: true
+              ansible.builtin.copy:
+                dest: "{{ portal_approval_path }}"
+                content: "{{ portal_revision }}\n"
+                owner: root
+                group: root
+                mode: '0600'
+                force: false
+
+            - name: Start narrowly scoped root broker
+              become: true
+              ansible.builtin.systemd_service:
+                name: gway-ap-nft-broker.service
+                state: started
+                enabled: true
+
+            - name: Reconcile consent-backed grants without clearing UNCERTAIN
+              become: true
+              ansible.builtin.systemd_service:
+                name: gway-ap-host-security-reconcile.service
+                state: started
+
+            - name: Start unprivileged portal after broker and prerequisites
+              become: true
+              ansible.builtin.systemd_service:
+                name: gway-ap-portal.service
+                state: started
+                enabled: true
+
+            - name: Verify direct local portal health
+              ansible.builtin.uri:
+                url: http://127.0.0.1:9080/health
+                status_code: 200
+                return_content: false
+                timeout: 5
+
+            - name: Verify existing Nginx proxy health without reloading Nginx
+              ansible.builtin.uri:
+                url: http://127.0.0.1/health
+                status_code: 200
+                return_content: false
+                timeout: 5
+
+            - name: Store sanitized success receipt in private backup
+              become: true
+              ansible.builtin.copy:
+                dest: "{{ portal_backup.path }}/activation-receipt.txt"
+                content: "status=activated\nrevision={{ portal_revision }}\nhealth=verified\nreboot=not_tested\nphysical_clients=not_tested\n"
+                owner: root
+                group: root
+                mode: '0600'
+                force: false
+
+          rescue:
+            - name: Stop candidate portal and broker first
+              become: true
+              ansible.builtin.systemd_service:
+                name: "{{ item }}"
+                state: stopped
+                enabled: false
+              loop: [gway-ap-portal.service, gway-ap-nft-broker.service]
+              failed_when: false
+
+            - name: Remove activation marker to prevent automatic restart
+              become: true
+              ansible.builtin.file:
+                path: "{{ portal_approval_path }}"
+                state: absent
+              failed_when: false
+
+            - name: Restore exact original boot policy, never flush live host nft
+              when: portal_backup.path is defined
+              become: true
+              ansible.builtin.copy:
+                src: "{{ portal_backup.path }}/original-nftables.conf"
+                dest: "{{ portal_boot_conf }}"
+                remote_src: true
+                owner: root
+                group: root
+                mode: '0644'
+              failed_when: false
+
+            - name: Remove only captive files owned by this aborted cutover
+              become: true
+              ansible.builtin.file:
+                path: "{{ item }}"
+                state: absent
+              loop: "{{ [portal_captive_conf] + portal_installed | map(attribute='dest') | list }}"
+              failed_when: false
+
+            - name: Reload systemd metadata after candidate rollback
+              become: true
+              ansible.builtin.systemd_service:
+                daemon_reload: true
+              failed_when: false
+
+            - name: Check if any new consent arrived during cutover
+              become: true
+              ansible.builtin.stat:
+                path: "{{ portal_state_dir }}/consents.jsonl"
+                checksum_algorithm: sha256
+                get_checksum: true
+                follow: false
+              register: portal_consent_after
+              failed_when: false
+              no_log: true
+
+            - name: Remove only our in-memory captive table if no consent changed
+              when:
+                - portal_table_applied is defined
+                - portal_table_applied is succeeded
+                - portal_consent_after is succeeded
+                - portal_consent_before.stat.exists == portal_consent_after.stat.exists
+                - (portal_consent_before.stat.checksum | default('')) == (portal_consent_after.stat.checksum | default(''))
+              become: true
+              ansible.builtin.command:
+                argv: [nft, delete, table, inet, gway_ap_portal]
+              failed_when: false
+
+            - name: Preserve failure evidence without publishing private state
+              when: portal_backup.path is defined
+              become: true
+              ansible.builtin.copy:
+                dest: "{{ portal_backup.path }}/activation-receipt.txt"
+                content: "status=failed\nrevision={{ portal_revision }}\nrecovery=attempted\nlive_firewall=requires_operator_review\n"
+                owner: root
+                group: root
+                mode: '0600'
+              failed_when: false
+
+            - name: Fail closed after bounded compensation
+              ansible.builtin.fail:
+                msg: "Activation aborted; private receipt retained. Verify current nft table, host grants and network before retrying."
