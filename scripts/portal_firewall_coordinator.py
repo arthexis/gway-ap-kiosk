@@ -55,10 +55,77 @@ class NftGrantCoordinator:
     by a failed batch. No deletion API is exposed: foreign grants must
     never be flushed, replaced or revoked by portal failure recovery.
     """
-    def __init__(self, *, run=_run):
+    def __init__(self, *, run=_run, require_captive: bool = False):
         self.run = run
+        self.require_captive = require_captive
+
+    def verify_captive(self):
+        """Check live forward hook and fail-closed terminal wlan0 drop.
+
+        Exact four-rule shape is required: registered MAC accept, two
+        preauth destination exceptions limited to HTTP(S), then drop.
+        Unknown/broader rules are rejected, not treated as authorized.
+        """
+        raw = self.run(["nft", "-j", "list", "chain", "inet",
+                        "gway_ap_portal", "forward"])
+        try:
+            entries = json.loads(raw)["nftables"]
+            chains = [x["chain"] for x in entries if "chain" in x]
+            rules = [x["rule"] for x in entries if "rule" in x]
+            if len(chains) != 1 or len(rules) != 4:
+                raise ValueError("unexpected captive rules")
+            c = chains[0]
+            if not (c.get("family") == "inet" and
+                    c.get("table") == "gway_ap_portal" and
+                    c.get("name") == "forward" and
+                    c.get("hook") == "forward" and
+                    c.get("prio") == -5 and
+                    c.get("type") == "filter"):
+                raise ValueError("captive chain is not a forward hook")
+            expected_sets = ("authorized_macs", "preauth_ipv4", "preauth_ipv6")
+            for index, rule in enumerate(rules):
+                if (rule.get("family") != "inet" or
+                    rule.get("table") != "gway_ap_portal" or
+                    rule.get("chain") != "forward"):
+                    raise ValueError("unexpected captive rule location")
+                expr = rule.get("expr")
+                if not isinstance(expr, list) or len(expr) < (2 if index == 3 else 3):
+                    raise ValueError("incomplete captive rule")
+                gate = expr[0].get("match", {})
+                if gate != {"op": "==", "left": {"meta": {"key": "iifname"}},
+                            "right": "wlan0"}:
+                    raise ValueError("captive rule is not wlan0-scoped")
+                verdict = "drop" if index == 3 else "accept"
+                if list(expr[-1]) != [verdict]:
+                    raise ValueError("unexpected captive verdict")
+                if index < 3:
+                    required_set = ("authorized_macs", "preauth_ipv4", "preauth_ipv6")[index]
+                    if len(expr) != (3 if index == 0 else 4):
+                        raise ValueError("unexpected captive exception shape")
+                    match = expr[1].get("match")
+                    expected_source = {"protocol": "ether", "field": "saddr"}
+                    expected_destination = {"protocol": "ip" if index == 1 else "ip6",
+                                            "field": "daddr"}
+                    if not isinstance(match, dict) or match.get("op") != "==" or (
+                            match.get("left") != {"payload": expected_source if index == 0
+                                                  else expected_destination}) or (
+                            match.get("right") != {"set": "@" + required_set}):
+                        raise ValueError("untrusted captive exception")
+                    if index > 0:
+                        port = expr[2].get("match")
+                        if (not isinstance(port, dict) or port.get("op") != "==" or
+                                port.get("left") != {"payload": {
+                                    "protocol": "tcp", "field": "dport"}} or
+                                port.get("right") != {"set": [80, 443]}):
+                            raise ValueError("widened pre-auth destination ports")
+                elif len(expr) != 2:
+                    raise ValueError("nonterminal or conditional captive drop")
+        except (KeyError, ValueError, TypeError) as exc:
+            raise CoordinationError("captive forwarding policy unverified") from exc
 
     def snapshot(self):
+        if self.require_captive:
+            self.verify_captive()
         result = {}
         for table, name in SETS:
             raw = self.run(["nft", "-j", "list", "set", "inet", table, name])

@@ -375,3 +375,48 @@ restart without deleting foreign grants, documented nft base-chain verdicts,
 separate firewall and state restore exercises, reviewed manual UNCERTAIN
 recovery and physical AP/uplink acceptance. A green CI result on this importer
 is not enough to activate the portal or close #31.
+
+## Stage 5 — mandatory registration + host-security restart candidate (offline)
+
+The opt-in `--mandatory-registration` mode is **required in the staged
+service template** and refuses startup unless the coordinated firewall,
+non-disabled sync and restricted nft broker are configured. The server's
+coordinated registration writes durable consent with UUIDv4 user/device/
+session identifiers **before** requesting a grant. Existing trusted or
+authorized MACs alone no longer qualify for Internet access; old consent
+records without identifiers remain intact but do not authorize forwarding.
+
+The root broker validates persisted authorization **and** completed,
+identified consent for each requested MAC. Before granting, its strict
+coordinator requires a live `inet gway_ap_portal forward` chain with a
+`wlan0` interface check, priority -5 (ahead of NetworkManager's ordinary
+priority 0 forward accept), an authorized-MAC exception, scoped IPv4/IPv6
+preauth TCP 80/443 destination exceptions, and a terminal drop. A missing or
+widened chain fails the broker check. Exact nft JSON normalization must be
+confirmed on the target kernel before activation; these checks do not prove
+the entire host ruleset.
+
+A **noninstalled candidate** `gway-ap-host-security-reconcile.service`
+rebuilds only persisted, consenting grants using the same broker and
+`authorization.pending` safeguard. Its candidate drop-in adds a
+`host-security-firewall.service` post-start trigger, because that service
+deletes and rebuilds the entire `inet host_security` table. The hook is
+intentionally asynchronous (`systemctl --no-block`) to avoid a systemd
+ordering cycle: integration must explicitly verify that it runs to
+completion after each host-security recreation, preserves independently
+managed grants, and reports failures. It **does not** restart the host
+firewall or activate either service by staging.
+
+The currently enabled NetworkManager AP forwarding/NAT independently
+passes upstream Internet. If the captive nft base chain is absent or later
+deleted, normal Internet may be available without registration. Therefore
+**never treat application startup checks alone as fail-closed network
+isolation**. A later reviewed activation must establish and prove the
+forwarding deny policy before allowing unauthenticated clients, and must
+test failure/restart paths on an actual Wi-Fi client.
+
+The root-owned cutover assertion, backups, restricted state migration,
+writer exclusivity, independent grants provenance, safe rollback and
+physical AP/uplink/SSH/WireGuard/OCPP acceptance remain mandatory; this
+offline increment does not complete them. No production service, nftables
+hook or AP configuration is changed by merging the PR.
