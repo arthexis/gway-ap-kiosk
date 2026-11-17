@@ -1,6 +1,7 @@
 [Unit]
 Description=GWAY AP portal candidate (activation requires reviewed migration)
-After=network-online.target
+Requires=gway-ap-nft-broker.service
+After=network-online.target nftables.service host-security-firewall.service gway-ap-nft-broker.service
 Wants=network-online.target
 ConditionPathExists=/etc/gway-ap-kiosk/portal-activation-approved
 

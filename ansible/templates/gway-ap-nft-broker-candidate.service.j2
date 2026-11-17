@@ -1,7 +1,8 @@
 [Unit]
 Description=GWAY AP nft authorization broker candidate (NOT ACTIVE)
 ConditionPathExists=/etc/gway-ap-kiosk/portal-activation-approved
-After=network.target
+Requires=host-security-firewall.service
+After=network.target nftables.service host-security-firewall.service
 
 [Service]
 Type=simple

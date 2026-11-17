@@ -60,6 +60,9 @@
         - portal_attribution.py
         - portal_captive_policy.py
         - portal_authorization_reconcile.py
+        - portal_boot_rules.py
+        - portal_host_grants.py
+        - portal_nft_reload.py
 
     - name: Stage portal assets without touching the live Nginx site
       become: true
@@ -110,6 +113,16 @@
       ansible.builtin.copy:
         src: "{{ portal_project_root }}/ansible/templates/gway-ap-host-security-reconcile-dropin.conf"
         dest: "{{ portal_candidate_dir }}/90-gway-ap-reconcile.conf"
+        owner: root
+        group: root
+        mode: "0644"
+        force: false
+
+    - name: Stage nftables persistent-reload drop-in, never install
+      become: true
+      ansible.builtin.template:
+        src: "{{ portal_project_root }}/ansible/templates/gway-ap-nftables-reconcile-dropin.conf.j2"
+        dest: "{{ portal_candidate_dir }}/90-gway-ap-nft-reconcile.conf"
         owner: root
         group: root
         mode: "0644"
