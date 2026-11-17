@@ -1,0 +1,18 @@
+[Unit]
+Description=Reconcile registered AP grants after host_security reconstruction (candidate only)
+ConditionPathExists=/etc/gway-ap-kiosk/portal-activation-approved
+After=host-security-firewall.service gway-ap-nft-broker.service
+Requires=gway-ap-nft-broker.service
+
+[Service]
+Type=oneshot
+User=gwayap
+Group=gwayap
+Environment=GWAY_AP_CUTOVER_APPROVED=1
+ExecStart=/usr/bin/python3 {{ portal_candidate_dir }}/scripts/portal_authorization_reconcile.py --state-dir /var/lib/gway-ap-kiosk/portal --broker-socket /run/gway-ap-nft/broker.sock --require-consent
+NoNewPrivileges=yes
+UMask=0077
+ProtectSystem=strict
+ReadWritePaths=/var/lib/gway-ap-kiosk/portal
+ProtectHome=yes
+PrivateTmp=yes
