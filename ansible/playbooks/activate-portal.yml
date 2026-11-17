@@ -99,6 +99,13 @@
           - "{{ portal_state_dir }}"
       changed_when: false
 
+    - name: Inspect existing approval marker without following links
+      become: true
+      ansible.builtin.stat:
+        path: "{{ portal_approval_path }}"
+        follow: false
+      register: portal_existing_marker
+
     - name: Prove independent live grants are already backed by their host source
       become: true
       ansible.builtin.command:
@@ -107,6 +114,7 @@
       register: portal_grant_proof
       changed_when: false
       no_log: true
+      when: not portal_existing_marker.stat.exists
 
     - name: Validate unchanged Nginx site and its existing local portal upstream
       become: true
@@ -120,13 +128,6 @@
       ansible.builtin.command:
         argv: [nginx, -t]
       changed_when: false
-
-    - name: Inspect existing approval marker without following links
-      become: true
-      ansible.builtin.stat:
-        path: "{{ portal_approval_path }}"
-        follow: false
-      register: portal_existing_marker
 
     - name: Existing deployment is accepted only for the exact same revision
       when: portal_existing_marker.stat.exists
@@ -157,6 +158,13 @@
               - "{{ portal_candidate_dir }}/scripts"
           changed_when: false
           no_log: true
+
+        - name: Verify retained Nginx and portal health on rerun
+          ansible.builtin.uri:
+            url: http://127.0.0.1/health
+            status_code: 200
+            return_content: false
+            timeout: 5
 
         - name: Verify already active portal and broker (idempotent rerun)
           become: true
