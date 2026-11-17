@@ -28,13 +28,13 @@ def _check(result):
 
 
 def reload_with_reconcile(*, lock: Path = Path(BROKER_LOCK),
-                          config: str = NFT_CONF, runner=subprocess.run) -> None:
+                          config: str = NFT_CONF, runner=subprocess.run, root_uid: int = 0) -> None:
     # Same root-owned lock as the broker. Serialize full-table re-creation
     # against its additive grant batches, not against portal state writes.
     fd = os.open(lock, os.O_RDWR | os.O_NOFOLLOW)
     try:
         info = os.fstat(fd)
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != root_uid or
                 info.st_mode & 0o077 or info.st_nlink != 1):
             raise ReloadError("untrusted reload coordination lock")
         try:
