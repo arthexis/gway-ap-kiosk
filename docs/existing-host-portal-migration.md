@@ -337,3 +337,41 @@ obtain protected offline backup plus separate firewall/state backups,
 validate private file ownership on the host, and independently review
 the UNCERTAIN release procedure. No runtime or physical acceptance
 is claimed by this Draft.
+
+
+## Protected legacy import candidate (offline implementation)
+
+`scripts/portal_legacy_import.py` can import exactly five allowlisted portal
+state files from a legacy directory into a **new, absent** private destination.
+Invoke only as root, after separately observing that legacy portal/path/sync
+writers have stopped and completing independent restricted backups of nftables,
+service definitions, Nginx and state. The command requires the dedicated
+non-root `gwayap` account and verifies legacy source ownership, destination
+parent ownership, no writable source directories, regular single-link legacy
+files and no symlinks. It uses exclusive creation, mode 0600 for files,
+mode 0700 for the destination, fsync and a second source read to detect
+observed instability. It never edits the source, emits private payloads,
+installs services, or accesses nftables.
+
+Example **only for a reviewed maintenance window**, not an activation command:
+
+```sh
+sudo python3 scripts/portal_legacy_import.py \\
+  --source /home/arthe/gway-ap-kiosk/.state/ap_portal \\
+  --destination /var/lib/gway-ap-kiosk/portal --target-user gwayap
+```
+
+A partial destination on failure is **not** a valid migration or permission
+to retry against the same path. An operator must quarantine it, re-establish
+writer exclusivity and independently validate a rollback before a fresh
+attempt. The redacted import receipt explicitly marks activation, firewall
+backup and writer-quiescence as unverified. Read-twice does not establish an
+atomic snapshot or guarantee against hostile same-UID writers. No live node
+has been migrated by the addition of this candidate tool.
+
+**Acceptance remains gated** on ownership of the external `host_security`
+writer (which recreates its table), restoration of portal grants after that
+restart without deleting foreign grants, documented nft base-chain verdicts,
+separate firewall and state restore exercises, reviewed manual UNCERTAIN
+recovery and physical AP/uplink acceptance. A green CI result on this importer
+is not enough to activate the portal or close #31.
