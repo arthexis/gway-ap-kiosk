@@ -12,6 +12,7 @@ import os
 import stat
 import subprocess
 from pathlib import Path
+from portal_host_grants import compare_source_and_live, check_file
 
 NFT_CONF = "/etc/nftables.conf"
 BROKER_LOCK = "/run/gway-ap-nft/coord.lock"
@@ -43,7 +44,6 @@ def reload_with_reconcile(*, lock: Path = Path(BROKER_LOCK),
             raise ReloadError("another firewall writer active") from exc
         # Refuse the destructive flush if an independent writer has added
         # host grants not yet represented in its persistent owned source.
-        from portal_host_grants import compare_source_and_live, check_file
         live = runner(["nft", "-j", "list", "set", "inet",
                        "host_security", "ap_allowed_macs"],
                       timeout=8, capture_output=True, check=False)
