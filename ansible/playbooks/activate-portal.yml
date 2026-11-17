@@ -118,9 +118,10 @@
           - -c
           - |
             import sys
+            from pathlib import Path
             sys.path.insert(0, sys.argv[1])
             from portal_cutover_contract import check_contract
-            check_contract(sys.argv[2])
+            check_contract(Path(sys.argv[2]))
           - "{{ portal_candidate_dir }}/scripts"
           - "{{ portal_contract_path }}"
       changed_when: false

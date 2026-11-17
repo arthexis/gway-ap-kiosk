@@ -64,3 +64,17 @@ def test_broker_unit_pins_private_root_contract_and_dedicated_uid():
     assert "--cutover-contract /etc/gway-ap-kiosk/portal-writer-cutover.json" in unit
     assert "portal_cutover_contract.py" in stage
     assert "id -u gwayap" in stage
+
+
+def test_activated_playbook_converts_cli_argument_into_path():
+    """The gated contract must be reachable before any live nft mutation."""
+    import yaml
+    root = SOURCE.parents[1]
+    tasks = yaml.safe_load(
+        (root / "ansible/playbooks/activate-portal.yml").read_text())[0]["tasks"]
+    task = next(t for t in tasks if t["name"] ==
+                "Require privately owned root cutover assertions")
+    program = task["ansible.builtin.command"]["argv"][2]
+    assert "from pathlib import Path" in program
+    assert "check_contract(Path(sys.argv[2]))" in program
+    assert "check_contract(sys.argv[2])" not in program
