@@ -389,6 +389,10 @@ class ActivityRecorder:
         authorized = _read_authorized_macs(self.config.authorized_macs_path)
         trusted = _read_trusted_macs(self.config.trusted_macs_path)
         effective_authorized = authorized | trusted
+        if self.config.mandatory_registration:
+            from portal_captive_policy import eligible_grants, read_consented_macs
+            effective_authorized = eligible_grants(
+                authorized, trusted, read_consented_macs(self.config.consents_path))
 
         for mac in effective_authorized:
             clients.setdefault(
