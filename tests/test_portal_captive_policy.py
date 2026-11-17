@@ -39,7 +39,7 @@ def rule(index):
     else:
         name = ("authorized_macs", "preauth_ipv4", "preauth_ipv6")[index]
         expr = [interface, {"match": {"op": "==",
-                            "left": {"payload": {"protocol": "ether" if index == 0 else "ip",
+                            "left": {"payload": {"protocol": "ether" if index == 0 else ("ip" if index == 1 else "ip6"),
                                                   "field": "saddr" if index == 0 else "daddr"}},
                             "right": {"set": "@" + name}}}]
         if index in (1, 2):
