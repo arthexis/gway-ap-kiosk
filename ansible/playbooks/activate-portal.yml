@@ -67,6 +67,49 @@
         - portal_nft_reload.py
       changed_when: false
 
+    - name: Inspect staged candidate units and drop-ins without following links
+      become: true
+      ansible.builtin.stat:
+        path: "{{ portal_candidate_dir }}/{{ item.src }}"
+        follow: false
+      loop: "{{ portal_installed }}"
+      register: portal_staged_units
+
+    - name: Reject unexpected staged candidate ownership or links
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg
+          - not item.stat.islnk
+          - item.stat.pw_name == 'root'
+          - item.stat.mode == '0644'
+      loop: "{{ portal_staged_units.results }}"
+
+    - name: Verify staged systemd unit syntax without installation
+      become: true
+      ansible.builtin.command:
+        argv:
+          - systemd-analyze
+          - verify
+          - "{{ portal_candidate_dir }}/gway-ap-portal.service"
+          - "{{ portal_candidate_dir }}/gway-ap-nft-broker.service"
+          - "{{ portal_candidate_dir }}/gway-ap-host-security-reconcile.service"
+      changed_when: false
+
+    - name: Inspect approval directory without following links
+      become: true
+      ansible.builtin.stat:
+        path: /etc/gway-ap-kiosk
+        follow: false
+      register: portal_approval_parent
+
+    - name: Reject an unsafe approval directory
+      ansible.builtin.assert:
+        that:
+          - not portal_approval_parent.stat.exists or
+            ((portal_approval_parent.stat.isdir | default(false)) and
+             not (portal_approval_parent.stat.islnk | default(false)) and
+             portal_approval_parent.stat.pw_name == 'root')
+
     - name: Require privately owned root cutover assertions
       become: true
       ansible.builtin.command:
