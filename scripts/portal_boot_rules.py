@@ -92,12 +92,22 @@ def main() -> int:
     parser.add_argument("--base", type=Path, required=True)
     parser.add_argument("--out-boot", type=Path, required=True)
     parser.add_argument("--out-portal", type=Path, required=True)
+    parser.add_argument("--host-source", type=Path, required=True)
+    parser.add_argument("--out-validation", type=Path, required=True)
     args = parser.parse_args()
     if os.geteuid() != 0:
         parser.error("root-owned private preparation required")
     base = _read_regular(args.base)
+    host = _read_regular(args.host_source)
+    if "table inet host_security {" not in host:
+        raise BootRulesError("missing host-security persistent source")
+    candidate = render_captive()
+    # Validate precisely the same host and captive policy that the managed
+    # includes will load, without touching host nftables or replacing tables.
+    validation = base.rstrip("\n") + "\n\n" + host + "\n" + candidate
     for path, payload in ((args.out_boot, render_boot(base)),
-                          (args.out_portal, render_captive())):
+                          (args.out_portal, candidate),
+                          (args.out_validation, validation)):
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                      0o600)
         try:
