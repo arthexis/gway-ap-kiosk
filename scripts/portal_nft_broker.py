@@ -60,7 +60,8 @@ def decode_request(data: bytes) -> set[str]:
     return normalized
 
 
-def verify_persisted_grants(state_dir: Path, requested: set[str], *, uid: int) -> None:
+def verify_persisted_grants(state_dir: Path, requested: set[str], *, uid: int,
+                            require_consent: bool = False) -> None:
     """Match grants to a pinned, private state-directory descriptor.
 
     This verifies persisted records, not application identity. Dedicated UID
@@ -123,12 +124,22 @@ def verify_persisted_grants(state_dir: Path, requested: set[str], *, uid: int) -
                 allowed.add(token[0].lower())
         if not requested <= allowed:
             raise BrokerRejected("requested MAC lacks persisted authorization")
+        if require_consent:
+            from portal_captive_policy import consented_macs
+            consent_text = read_private("consents.jsonl")
+            try:
+                records = [json.loads(row) for row in (consent_text or "").splitlines()]
+                consented = consented_macs(records)
+            except (ValueError, CoordinationError, TypeError) as exc:
+                raise BrokerRejected("untrusted consent inventory") from exc
+            if not requested <= consented:
+                raise BrokerRejected("requested MAC lacks completed consent")
     finally:
         os.close(directory_fd)
 
 
 def serve_request(conn, *, uid: int, coordinator, lock_path: Path, state_dir: Path | None = None,
-                  lock_owner_uid: int = 0) -> None:
+                  lock_owner_uid: int = 0, require_consent: bool = False) -> None:
     authorize_peer(conn, allowed_uid=uid)
     message = bytearray()
     # Read until clean EOF, not just the first newline: reject second frames
@@ -163,7 +174,8 @@ def serve_request(conn, *, uid: int, coordinator, lock_path: Path, state_dir: Pa
             coordinator.snapshot()
         else:
             if state_dir is not None:
-                verify_persisted_grants(state_dir, macs, uid=uid)
+                verify_persisted_grants(state_dir, macs, uid=uid,
+                                        require_consent=require_consent)
             coordinator.add(macs)
     finally:
         os.close(fd)
@@ -193,7 +205,8 @@ def run_server(*, socket_path: Path, lock_path: Path, uid: int, state_dir: Path 
                     conn.settimeout(3)
                     try:
                         serve_request(conn, uid=uid, coordinator=NftGrantCoordinator(),
-                                      lock_path=lock_path, state_dir=state_dir)
+                                      lock_path=lock_path, state_dir=state_dir,
+                                      require_consent=True)
                     except (BrokerRejected, CoordinationError, OSError, ValueError):
                         # No MACs or nft stderr in response.
                         try:
