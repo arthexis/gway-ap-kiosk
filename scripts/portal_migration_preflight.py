@@ -14,11 +14,14 @@ from pathlib import Path
 STATE_FILES = ("authorized_macs.txt", "trusted_macs.txt", "consents.jsonl", "activity.jsonl")
 
 
-def command_ok(*command: str) -> bool:
+def command_ok(*command: str) -> bool | None:
     try:
-        return subprocess.run(command, capture_output=True, timeout=5, check=False).returncode == 0
+        result = subprocess.run(command, capture_output=True, timeout=5, check=False)
+        # A failed read can mean insufficient privilege, not absence.  Never
+        # turn permission errors or unavailable tools into negative evidence.
+        return True if result.returncode == 0 else None
     except (OSError, subprocess.TimeoutExpired):
-        return False
+        return None
 
 
 def inspect(state_dir: Path, *, command=command_ok) -> dict:

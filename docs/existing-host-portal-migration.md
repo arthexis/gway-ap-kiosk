@@ -9,6 +9,9 @@ active AP is permitted by merely running the read-only preflight.
 2. Run `python3 scripts/portal_migration_preflight.py` on the existing host.
    Its JSON reports presence only; it intentionally does not inspect, log, or
    export identities, MACs, consent events, or stored credentials.
+   A `null` service or nftables result means the command failed or could not
+   run, including due to missing privileges; it does not establish absence.
+   Verify unknown results using an appropriately authorized read-only check.
 3. Separately inventory systemd unit definitions and drop-ins, the exact Nginx
    site and upstream, nftables ownership and hooks (including `inet host_security`
    and `inet gway_ap_portal`), the old sync helper and any shared `/opt/arthexis`

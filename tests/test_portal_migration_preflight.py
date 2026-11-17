@@ -3,6 +3,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / 'scripts/portal_migration_preflight.py'
@@ -39,6 +40,18 @@ class PreflightTests(unittest.TestCase):
             self.assertFalse(any(result['state_file_presence'].values()))
             self.assertFalse(result['host_firewall_ap_set_present'])
             self.assertFalse(result['portal_firewall_table_present'])
+            self.assertFalse(result['ready_for_automatic_migration'])
+
+    def test_failed_or_unavailable_command_is_unknown_not_absent(self):
+        with patch.object(module.subprocess, 'run') as run:
+            run.return_value.returncode = 1
+            self.assertIsNone(module.command_ok('nft', 'list', 'tables'))
+            run.side_effect = PermissionError()
+            self.assertIsNone(module.command_ok('nft', 'list', 'tables'))
+        with tempfile.TemporaryDirectory() as directory:
+            result = module.inspect(Path(directory), command=lambda *args: None)
+            self.assertIsNone(result['host_firewall_table_present'])
+            self.assertIsNone(result['host_firewall_ap_set_present'])
             self.assertFalse(result['ready_for_automatic_migration'])
 
 
