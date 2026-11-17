@@ -40,14 +40,21 @@ def static_grants(source: str) -> set[str]:
     return norm
 
 
-def compare_source_and_live(source: str, nft_json: str) -> int:
+def compare_source_and_live(source: str, nft_json: str,
+                            *, consented_dynamic=()) -> int:
     static = static_grants(source)
     try:
         current = _elements(json.loads(nft_json), "host_security", "ap_allowed_macs")
     except (ValueError, TypeError, CoordinationError) as exc:
         raise HostGrantError("live host-security set unavailable") from exc
-    if static != current:
-        raise HostGrantError("dynamic host grants differ from persistent source")
+    # Static grants are owned by host_security. Any additions must be
+    # independently provable as portal-owned, durably registered devices.
+    # Never silently adopt dynamic additions from an unrelated writer.
+    allowed = {str(value).lower() for value in consented_dynamic}
+    if (any(not MAC.fullmatch(value) for value in allowed) or
+            not static.issubset(current) or
+            not (current - static).issubset(allowed)):
+        raise HostGrantError("unowned live grants differ from persistent source")
     return len(static)
 
 
