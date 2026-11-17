@@ -57,6 +57,9 @@
         - portal_nft_broker.py
         - portal_grant_intent.py
         - portal_cutover_contract.py
+        - portal_attribution.py
+        - portal_captive_policy.py
+        - portal_authorization_reconcile.py
 
     - name: Stage portal assets without touching the live Nginx site
       become: true
@@ -92,6 +95,26 @@
         mode: "0644"
         force: false
 
+    - name: Stage host-security reconciliation service, never install
+      become: true
+      ansible.builtin.template:
+        src: "{{ portal_project_root }}/ansible/templates/gway-ap-host-security-reconcile-candidate.service.j2"
+        dest: "{{ portal_candidate_dir }}/gway-ap-host-security-reconcile.service"
+        owner: root
+        group: root
+        mode: "0644"
+        force: false
+
+    - name: Stage host-security restart hook, never install
+      become: true
+      ansible.builtin.copy:
+        src: "{{ portal_project_root }}/ansible/templates/gway-ap-host-security-reconcile-dropin.conf"
+        dest: "{{ portal_candidate_dir }}/90-gway-ap-reconcile.conf"
+        owner: root
+        group: root
+        mode: "0644"
+        force: false
+
     - name: Stage Nginx location candidate, never enable it
       become: true
       ansible.builtin.copy:
@@ -116,6 +139,9 @@
         - scripts/portal_nft_broker.py
         - scripts/portal_grant_intent.py
         - scripts/portal_cutover_contract.py
+        - scripts/portal_attribution.py
+        - scripts/portal_captive_policy.py
+        - scripts/portal_authorization_reconcile.py
         - config/data/ap_portal/index.html
         - config/data/ap_portal/app.css
         - config/data/ap_portal/app.js
