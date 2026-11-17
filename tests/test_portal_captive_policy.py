@@ -162,6 +162,10 @@ def test_uncertain_blocks_reconciliation(tmp_path):
 def test_legacy_and_incomplete_consent_fail_closed(tmp_path):
     path = tmp_path / "consents.jsonl"
     write_records(path, [{"mac_address": MAC, "accept_terms": True}])
+    assert policy.read_consented_macs(path) == set()
+    # A forged partial attribution record must not pass as legacy.
+    write_records(path, [{"mac_address": MAC, "accept_terms": True,
+                          "user_id": "not-a-uuid"}])
     with pytest.raises(nft.CoordinationError):
         policy.read_consented_macs(path)
     path.write_text(json.dumps(record()))  # incomplete trailing line
