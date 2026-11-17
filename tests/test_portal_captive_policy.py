@@ -209,3 +209,83 @@ def test_cli_implements_staged_args(monkeypatch):
     args = portal.parse_args()
     assert args.coordinated_firewall and args.mandatory_registration
     assert args.nft_broker_socket.endswith("broker.sock")
+
+
+def mandatory_state(tmp_path, monkeypatch, *, trusted=False, fail_grant=False):
+    from dataclasses import replace
+    state_dir = tmp_path / "private"
+    state_dir.mkdir(mode=0o700, exist_ok=True)
+    if trusted:
+        (state_dir / "trusted_macs.txt").write_text(MAC + "\n")
+    config = portal.PortalConfig(
+        bind="127.0.0.1", port=0, assets_dir=tmp_path, state_dir=state_dir,
+        authorized_macs_path=state_dir / "authorized_macs.txt",
+        trusted_macs_path=state_dir / "trusted_macs.txt",
+        consents_path=state_dir / "consents.jsonl",
+        activity_path=state_dir / "activity.jsonl", source_url="",
+        sync_firewall=True, coordinated_firewall=True,
+        mandatory_registration=True, nft_broker_socket="/tmp/fake-broker.sock")
+    actions = []
+
+    class Broker:
+        def snapshot(self):
+            actions.append("check")
+            return {}
+        def add(self, macs):
+            actions.append(("add", set(macs)))
+            if fail_grant:
+                raise portal.FirewallSyncError("simulated broker rejection")
+
+    b = Broker()
+    monkeypatch.setattr(portal.PortalState, "_coordinator", lambda _self: b)
+    state = portal.PortalState(config)
+    state.resolve_mac = lambda _: MAC
+    return state, actions
+
+
+def test_mandatory_mode_denies_trusted_without_registration_then_grants(tmp_path, monkeypatch):
+    state, actions = mandatory_state(tmp_path, monkeypatch, trusted=True)
+    status = state.status_for_request(
+        ip_address="10.42.0.25", user_agent="", path="/api/status", host="")
+    assert status["authorized"] is False
+    assert actions == ["check"]
+    assert all(row["authorized"] is False for row in state.activity.client_summary())
+    result = state.subscribe(email="registered@example.com", accept_terms=True,
+                             ip_address="10.42.0.25", user_agent="", host="")
+    assert result["authorized"] is True
+    assert actions[-1] == ("add", {MAC})
+    after = state.status_for_request(
+        ip_address="10.42.0.25", user_agent="", path="/api/status", host="")
+    assert after["authorized"] is True
+    assert not (state.config.state_dir / "authorization.pending").exists()
+    assert state.activity.client_summary()[0]["authorized"] is True
+
+
+def test_mandatory_mode_rejected_broker_never_grants_and_retains_uncertain(tmp_path, monkeypatch):
+    state, actions = mandatory_state(tmp_path, monkeypatch, fail_grant=True)
+    with pytest.raises(portal.FirewallSyncError):
+        state.subscribe(email="registered@example.com", accept_terms=True,
+                        ip_address="10.42.0.25", user_agent="", host="")
+    assert actions[-1] == ("add", {MAC})
+    assert not state.config.consents_path.exists()
+    assert not state.config.authorized_macs_path.exists()
+    assert (state.config.state_dir / "authorization.pending").exists()
+    with pytest.raises(Exception, match="uncertain"):
+        state.subscribe(email="again@example.com", accept_terms=True,
+                        ip_address="10.42.0.25", user_agent="", host="")
+
+
+def test_mandatory_mode_rejects_absent_broker(tmp_path):
+    from dataclasses import replace
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    config = portal.PortalConfig(
+        bind="127.0.0.1", port=0, assets_dir=tmp_path, state_dir=state_dir,
+        authorized_macs_path=state_dir / "authorized_macs.txt",
+        trusted_macs_path=state_dir / "trusted_macs.txt",
+        consents_path=state_dir / "consents.jsonl",
+        activity_path=state_dir / "activity.jsonl", source_url="",
+        sync_firewall=True, coordinated_firewall=True,
+        mandatory_registration=True)
+    with pytest.raises(portal.FirewallSyncError, match="requires coordinated broker"):
+        portal.PortalState(config)
