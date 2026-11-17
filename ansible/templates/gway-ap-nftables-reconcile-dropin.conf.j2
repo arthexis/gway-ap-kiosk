@@ -1,0 +1,7 @@
+[Service]
+# Root-only, reviewed activation. Original nftables.conf flushes all tables.
+# A full reload reconstitutes host_security + captive policy from includes,
+# then starts consent-only reconciliation outside the broker's lock.
+ExecReload=
+ExecReload=/usr/bin/python3 {{ portal_candidate_dir }}/scripts/portal_nft_reload.py
+ExecStartPost=/usr/bin/systemctl --no-block start gway-ap-host-security-reconcile.service
