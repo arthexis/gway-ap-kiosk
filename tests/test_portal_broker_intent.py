@@ -178,7 +178,7 @@ def test_broker_rejects_exposed_lock_without_nft_access(tmp_path, mode):
         def getsockopt(self, *_): return struct.pack("3i", 42, 12345, 42)
         def recv(self, size):
             self.reads += 1
-            return (json.dumps({"op":"add","macs":[MAC]}).encode()+b"\\n") if self.reads == 1 else b""
+            return (json.dumps({"op":"add","macs":[MAC]}).encode()+b"\n") if self.reads == 1 else b""
         def sendall(self, _): raise AssertionError("untrusted lock must not succeed")
     class NoNft:
         def add(self, _): raise AssertionError("untrusted lock must not reach nft")
@@ -197,7 +197,7 @@ def test_broker_rejects_hardlinked_lock_without_nft_access(tmp_path):
         def getsockopt(self, *_): return struct.pack("3i", 42, 12345, 42)
         def recv(self, size):
             self.reads += 1
-            return (json.dumps({"op":"check","macs":[]}).encode()+b"\\n") if self.reads == 1 else b""
+            return (json.dumps({"op":"check","macs":[]}).encode()+b"\n") if self.reads == 1 else b""
         def sendall(self, _): raise AssertionError("untrusted lock must not succeed")
     class NoNft:
         def snapshot(self): raise AssertionError("untrusted lock must not reach nft")
