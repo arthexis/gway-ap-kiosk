@@ -92,7 +92,7 @@ class FakeNft:
         for line in input.splitlines():
             parts = line.split()
             target = self.host if parts[3] == "host_security" else self.portal
-            target.update(x.strip(" {},") for x in parts[6:])
+            target.update(mac for mac in (x.strip(" {},") for x in parts[6:]) if mac)
         return ""
 
 
