@@ -94,6 +94,7 @@ class PortalConfig:
     local_development_mac: str | None = None
     coordinated_firewall: bool = False
     nft_broker_socket: str = ""
+    mandatory_registration: bool = False
 
 
 class FirewallSyncError(RuntimeError):
@@ -501,6 +502,9 @@ class PortalState:
         self._firewall = FirewallManager(
             preauth_allow_entries=config.preauth_allow_entries
         )
+        if config.mandatory_registration and not (
+                config.sync_firewall and config.coordinated_firewall and config.nft_broker_socket):
+            raise FirewallSyncError("mandatory registration requires coordinated broker")
         self.activity = ActivityRecorder(config)
         self._authorized = _read_authorized_macs(self.config.authorized_macs_path)
         self._trusted = _read_trusted_macs(self.config.trusted_macs_path)
@@ -584,7 +588,14 @@ class PortalState:
                     # Even a previously authorized device can be missing a grant
                     # after service restart; reconcile both sets additively.
                     firewall_attempted = True
-                    self._coordinator().add(next_authorized | self._trusted)
+                    eligible = self._effective_authorized_macs() if not self.config.mandatory_registration else (
+                        __import__("portal_captive_policy").eligible_grants(
+                            next_authorized, self._trusted,
+                            __import__("portal_captive_policy").read_consented_macs(
+                                self.config.consents_path)))
+                    if not eligible or mac_address not in eligible:
+                        raise FirewallSyncError("consent is not eligible for captive grant")
+                    self._coordinator().add(eligible)
             except Exception as failure:
                 # A failed nft batch is atomic. If any compensation fails,
                 # propagate the failure instead of reporting authorization.
@@ -645,12 +656,19 @@ class PortalState:
                 handle.truncate(position)
 
     def _effective_authorized_macs(self) -> set[str]:
-        return self._authorized | self._trusted
+        grants = self._authorized | self._trusted
+        if self.config.mandatory_registration:
+            from portal_captive_policy import read_consented_macs, eligible_grants
+            return eligible_grants(self._authorized, self._trusted,
+                                   read_consented_macs(self.config.consents_path))
+        return grants
 
     def _authorization_for_mac(self, mac_address: str | None) -> tuple[bool, bool]:
         if not mac_address:
             return False, False
         trusted = mac_address in self._trusted
+        if self.config.mandatory_registration:
+            return mac_address in self._effective_authorized_macs(), trusted
         return mac_address in self._authorized or trusted, trusted
 
     def status_for_request(
@@ -1144,6 +1162,7 @@ def build_config(args: argparse.Namespace) -> PortalConfig:
         local_development_mac=local_development_mac or None,
         coordinated_firewall=getattr(args, "coordinated_firewall", False),
         nft_broker_socket=getattr(args, "nft_broker_socket", ""),
+        mandatory_registration=getattr(args, "mandatory_registration", False),
     )
 
 
@@ -1185,6 +1204,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Start the portal without writing nftables rules; intended for tests only.",
     )
+    parser.add_argument("--coordinated-firewall", action="store_true",
+                        help="Use additive dual-set authorization")
+    parser.add_argument("--nft-broker-socket", default="",
+                        help="Restricted nft broker socket")
+    parser.add_argument("--mandatory-registration", action="store_true",
+                        help="Require durable identified consent before Internet grant")
     return parser.parse_args()
 
 
@@ -1197,6 +1222,9 @@ def main() -> int:
         raise ValueError("nft broker requires coordinated firewall")
     if args.coordinated_firewall and args.skip_firewall_sync:
         raise ValueError("coordinated firewall cannot be disabled with --skip-firewall-sync")
+    if args.mandatory_registration and not (
+            args.coordinated_firewall and args.nft_broker_socket and not args.skip_firewall_sync):
+        raise ValueError("mandatory registration requires a coordinated nft broker")
     config = build_config(args)
     app = PortalApplication(config)
     server = ThreadingHTTPServer((config.bind, config.port), app.handler_class())
