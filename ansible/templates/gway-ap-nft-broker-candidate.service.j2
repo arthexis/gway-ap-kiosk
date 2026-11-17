@@ -7,9 +7,9 @@ After=network.target nftables.service host-security-firewall.service
 [Service]
 Type=simple
 User=root
-Group=root
+Group=gwayap
 RuntimeDirectory=gway-ap-nft
-RuntimeDirectoryMode=0711
+RuntimeDirectoryMode=0710
 ExecStart=/usr/bin/python3 {{ portal_candidate_dir }}/scripts/portal_nft_broker.py --socket /run/gway-ap-nft/broker.sock --lock /run/gway-ap-nft/coord.lock --uid {{ portal_operator_uid }} --state-dir /var/lib/gway-ap-kiosk/portal --cutover-contract /etc/gway-ap-kiosk/portal-writer-cutover.json
 CapabilityBoundingSet=CAP_NET_ADMIN
 AmbientCapabilities=CAP_NET_ADMIN
