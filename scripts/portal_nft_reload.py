@@ -12,7 +12,7 @@ import os
 import stat
 import subprocess
 from pathlib import Path
-from portal_host_grants import compare_source_and_live, check_file
+from portal_host_grants import compare_source_and_live, check_file, HostGrantError
 
 NFT_CONF = "/etc/nftables.conf"
 BROKER_LOCK = "/run/gway-ap-nft/coord.lock"
@@ -82,7 +82,7 @@ def main() -> int:
         raise SystemExit("reload requires root")
     try:
         reload_with_reconcile()
-    except (OSError, ReloadError, subprocess.TimeoutExpired, ValueError) as exc:
+    except (OSError, ReloadError, HostGrantError, subprocess.TimeoutExpired, ValueError):
         raise SystemExit("AP nftables reload incomplete; hold access and inspect receipt")
     return 0
 
