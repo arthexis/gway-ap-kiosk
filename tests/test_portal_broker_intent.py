@@ -63,11 +63,11 @@ def test_broker_validates_peer_uid_not_header(monkeypatch, tmp_path):
             self.calls.append(set(macs))
     c = Coordinator()
     broker.serve_request(Conn(12345), uid=12345, coordinator=c,
-                         lock_path=tmp_path / "lock")
+                         lock_path=tmp_path / "lock", lock_owner_uid=os.getuid())
     assert c.calls == [{MAC}]
     with pytest.raises(broker.BrokerRejected):
         broker.serve_request(Conn(12346), uid=12345, coordinator=c,
-                             lock_path=tmp_path / "lock")
+                             lock_path=tmp_path / "lock", lock_owner_uid=os.getuid())
     assert len(c.calls) == 1
 
 
@@ -165,4 +165,42 @@ def test_busy_broker_lock_refuses_firewall_write(tmp_path, monkeypatch):
         raise BlockingIOError("locked")
     monkeypatch.setattr(broker.fcntl, "flock", busy_lock)
     with pytest.raises(broker.BrokerRejected, match="writer is active"):
-        broker.serve_request(Conn(), uid=12345, coordinator=Coordinator(), lock_path=tmp_path/"broker.lock")
+        broker.serve_request(Conn(), uid=12345, coordinator=Coordinator(), lock_path=tmp_path/"broker.lock", lock_owner_uid=os.getuid())
+
+
+@pytest.mark.parametrize("mode", [0o644, 0o660, 0o666])
+def test_broker_rejects_exposed_lock_without_nft_access(tmp_path, mode):
+    lock = tmp_path / "lock"
+    lock.write_text("")
+    lock.chmod(mode)
+    class Conn:
+        def __init__(self): self.reads = 0
+        def getsockopt(self, *_): return struct.pack("3i", 42, 12345, 42)
+        def recv(self, size):
+            self.reads += 1
+            return (json.dumps({"op":"add","macs":[MAC]}).encode()+b"\\n") if self.reads == 1 else b""
+        def sendall(self, _): raise AssertionError("untrusted lock must not succeed")
+    class NoNft:
+        def add(self, _): raise AssertionError("untrusted lock must not reach nft")
+    with pytest.raises(broker.BrokerRejected, match="untrusted broker lock"):
+        broker.serve_request(Conn(), uid=12345, coordinator=NoNft(),
+                             lock_path=lock, lock_owner_uid=os.getuid())
+
+
+def test_broker_rejects_hardlinked_lock_without_nft_access(tmp_path):
+    lock = tmp_path / "lock"
+    lock.write_text("")
+    lock.chmod(0o600)
+    os.link(lock, tmp_path / "second-link")
+    class Conn:
+        def __init__(self): self.reads = 0
+        def getsockopt(self, *_): return struct.pack("3i", 42, 12345, 42)
+        def recv(self, size):
+            self.reads += 1
+            return (json.dumps({"op":"check","macs":[]}).encode()+b"\\n") if self.reads == 1 else b""
+        def sendall(self, _): raise AssertionError("untrusted lock must not succeed")
+    class NoNft:
+        def snapshot(self): raise AssertionError("untrusted lock must not reach nft")
+    with pytest.raises(broker.BrokerRejected, match="untrusted broker lock"):
+        broker.serve_request(Conn(), uid=12345, coordinator=NoNft(),
+                             lock_path=lock, lock_owner_uid=os.getuid())
