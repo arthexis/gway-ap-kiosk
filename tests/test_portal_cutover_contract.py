@@ -74,7 +74,7 @@ def test_activated_playbook_converts_cli_argument_into_path():
         (root / "ansible/playbooks/activate-portal.yml").read_text())[0]["tasks"]
     task = next(t for t in tasks if t["name"] ==
                 "Require privately owned root cutover assertions")
-    program = task["ansible.builtin.command"]["argv"][3]
+    program = task["ansible.builtin.command"]["argv"][2]
     assert "from pathlib import Path" in program
     assert "check_contract(Path(sys.argv[2]))" in program
     assert "check_contract(sys.argv[2])" not in program
