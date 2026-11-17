@@ -71,6 +71,14 @@ def import_quiescent_legacy(source: Path, destination: Path, *,
         raise ImportDenied("invalid identity")
     if destination.exists() or destination.is_symlink():
         raise ImportDenied("destination must not exist")
+    # Prevent a privileged import from writing through an untrusted parent.
+    parent = _open_directory(destination.parent, private=False)
+    try:
+        parent_meta = os.fstat(parent)
+        if parent_meta.st_uid != source_uid:
+            raise ImportDenied("untrusted destination parent")
+    finally:
+        os.close(parent)
     src = _open_directory(source, private=False)
     try:
         if os.fstat(src).st_uid != source_uid:
