@@ -296,6 +296,18 @@
                 mode: '0600'
                 force: false
 
+            - name: Snapshot independently owned host-security source without changing it
+              become: true
+              ansible.builtin.copy:
+                src: /etc/nftables.d/host-security.nft
+                dest: "{{ portal_backup.path }}/original-host-security.nft"
+                remote_src: true
+                owner: root
+                group: root
+                mode: '0600'
+                force: false
+              no_log: true
+
             - name: Preserve independent live firewall evidence in private receipt
               become: true
               ansible.builtin.shell: >-
