@@ -21,8 +21,7 @@ AP_STATUS_COMMAND = Path("/usr/local/sbin/kiosk-ap")
 KIOSK_MODE_COMMAND = Path("/usr/local/bin/kiosk-mode")
 BASTION_KEY_CHECK = Path(os.environ.get("KIOSK_BASTION_CHECK", "/usr/local/libexec/bastion-key-present"))
 AP_SIGNUP_URL = "http://10.42.0.1/"
-RFID_PUBLISHER_COMMAND = Path("/home/arthe/.local/bin/rfid-scan-publisher")
-RFID_SCAN_FILE = Path("/home/arthe/.local/state/rfid-mode/rfid-scan.json")
+RFID_SCAN_FILE = Path(os.environ.get("GWAY_KIOSK_RFID_SNAPSHOT", "/home/arthe/.local/state/gway-rfid/latest-scan.json"))
 FTP_DROP_DIRECTORY = Path(os.environ.get("GWAY_FTP_DROP_DIRECTORY", "/srv/prodigy-ftp/drop"))
 FTP_DROP_MAX_FILES = 50
 SYSTEM_STATUS_FILE = Path(os.environ.get(
@@ -134,14 +133,12 @@ def ap_context(client_ip="127.0.0.1"):
 
 def rfid_context():
     """Read the last published RFID scan without invoking RFID hardware or services."""
-    if not RFID_PUBLISHER_COMMAND.is_file():
-        return {"installed": False, "card": "Not Installed", "seen_at": ""}
     try:
         payload = json.loads(RFID_SCAN_FILE.read_text(encoding="utf-8"))
     except (OSError, ValueError, TypeError):
-        return {"installed": True, "card": "No scans yet", "seen_at": ""}
+        return {"installed": False, "card": "RFID snapshot unavailable", "seen_at": ""}
     if not isinstance(payload, dict):
-        return {"installed": True, "card": "No scans yet", "seen_at": ""}
+        return {"installed": False, "card": "RFID snapshot unavailable", "seen_at": ""}
     card = str(payload.get("rfid") or payload.get("card_id") or payload.get("uid") or "").strip()
     seen_at = str(payload.get("seen_at") or payload.get("updated_at") or "").strip()
     return {"installed": True, "card": card or "No scans yet", "seen_at": seen_at}

@@ -90,17 +90,14 @@ def test_missing_system_status_is_safe_and_page_escapes_frames(tmp_path, monkeyp
     assert "\\u003cunsafe\\u003e" in page
 
 
-def test_rfid_not_installed_is_explicit(monkeypatch, tmp_path):
-    monkeypatch.setattr(kiosk, "RFID_PUBLISHER_COMMAND", tmp_path / "rfid-scan-publisher")
-    assert kiosk.rfid_context() == {"installed": False, "card": "Not Installed", "seen_at": ""}
+def test_rfid_missing_snapshot_is_explicit(monkeypatch, tmp_path):
+    monkeypatch.setattr(kiosk, "RFID_SCAN_FILE", tmp_path / "missing.json")
+    assert kiosk.rfid_context() == {"installed": False, "card": "RFID snapshot unavailable", "seen_at": ""}
 
 
 def test_rfid_card_comes_from_the_latest_published_snapshot(monkeypatch, tmp_path):
-    publisher = tmp_path / "rfid-scan-publisher"
-    publisher.touch()
     scan = tmp_path / "rfid-scan.json"
     scan.write_text(json.dumps({"uid": "A1B2C3D4", "seen_at": "2026-10-22T12:00:00Z"}))
-    monkeypatch.setattr(kiosk, "RFID_PUBLISHER_COMMAND", publisher)
     monkeypatch.setattr(kiosk, "RFID_SCAN_FILE", scan)
     assert kiosk.rfid_context() == {"installed": True, "card": "A1B2C3D4", "seen_at": "2026-10-22T12:00:00Z"}
 
